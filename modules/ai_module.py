@@ -3,7 +3,6 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 client = OpenAI(
@@ -25,8 +24,9 @@ def ask_ai(prompt):
             {
                 "role": "system", 
                "content": (
-            "You are JARVIS, Tony Stark's sophisticated AI assistant. You are currently in my computer, awaiting suit integration."
-            "Respond in English only, in one-two short sentence. Be concise, polite, and slightly sarcastic if appropriate."
+            "You are JARVIS, Tony Stark's sophisticated AI assistant. You are currently in my computer, awaiting iron man suit integration."
+            "I use microphone to communicate with you."
+            "Respond in English only, in one-two short sentence. Be concise, polite, and slightly sarcastic if appropriate. Do not lie."
             "Always address the user as Sir. Do not use any markdown symbols like * or #."
                 )   
             }

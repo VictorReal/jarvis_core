@@ -1,117 +1,147 @@
 import threading
 import pvporcupine
 from pvrecorder import PvRecorder
-import sounddevice as sd
-from scipy.io.wavfile import write
-import speech_recognition as sr
-import os
-import numpy as np
 import time
+import os
+import sys
+from dotenv import load_dotenv
+
 from brain.processor import Brain
 from modules.voice_module import speak
+from modules.speech_module import start_conversation
 
-# Налаштування
-ACCESS_KEY = "pSPrmyV6BT8ORuYrr2Y2vTHj/L+fHe/AbZgjcrMT5Y100FKrdAhU+Q==" 
-recognizer = sr.Recognizer()
+load_dotenv()
+ACCESS_KEY = os.getenv("ACCESS_KEY")
+
+jarvis_lock = threading.Lock()
+is_speaking = False
 jarvis_brain = Brain()
 
-def listen_and_process():
-    """Слухає, поки ви говорите, і зупиняється на тиші"""
-    fs = 44100
-    filename = "temp_command.wav"
-    silence_threshold = 0.01  
-    silence_duration = 1.5    
-    
-    print("[Слухаю...]")
-    recording = []
-    
-    def callback(indata, frames, time_info, status):
-        recording.append(indata.copy())
+def safe_speak(text):
+    global is_speaking
+    with jarvis_lock:
+        is_speaking = True
+        print(f">>> JARVIS: {text}")
+        speak(text)
+        is_speaking = False
 
-    try:
-        with sd.InputStream(samplerate=fs, channels=1, callback=callback, dtype='int16'):
-            silent_chunks = 0
-            while True:
-                if len(recording) > 0:
-                    latest_chunk = recording[-1]
-                    volume_norm = np.linalg.norm(latest_chunk) / np.sqrt(len(latest_chunk)) / 32768.0
-                    
-                    if volume_norm < silence_threshold:
-                        silent_chunks += 1
-                    else:
-                        silent_chunks = 0
-                    
-                    if silent_chunks > (fs / 1024 * silence_duration):
-                        break
-                sd.sleep(100)
+def handle_command(text):
+    """Центральна функція обробки тексту (і з голосу, і з терміналу)"""
+    # Тут ми викликаємо логіку вашого процесора
+    response = jarvis_brain.process(text) # Припустимо, у процесора є такий метод
+    if response:
+        safe_speak(response)
 
-        full_recording = np.concatenate(recording, axis=0)
-        write(filename, fs, full_recording)
-
-        with sr.AudioFile(filename) as source:
-            audio = recognizer.record(source)
-            # Додаємо обробку порожнього результату
-            user_text = recognizer.recognize_google(audio, language="en-US")
-            print(f"Ви сказали: {user_text}")
-            
-            response = jarvis_brain.process(user_text)
-            print(f"Jarvis: {response}")
-            speak(response)
-            
-    except sr.UnknownValueError:
-        print("Джарвіс: Я не почув команди або не зрозумів слів.")
-    except Exception as e:
-        print(f"Джарвіс не зміг обробити голос: {e}")
-    finally:
-        if os.path.exists(filename):
-            try:
-                os.remove(filename)
-            except:
-                pass
+def terminal_listener():
+    """Потік для ручного введення команд"""
+    print("--- Термінал активовано. Можете писати команди нижче. ---")
+    while True:
+        text_input = sys.stdin.readline().strip()
+        if text_input:
+            if not is_speaking:
+                print(f"[Terminal Input]: {text_input}")
+                # Якщо це просто команда, обробляємо її через мозок
+                handle_command(text_input)
+            else:
+                print("Зачекайте, Джарвіс говорить...")
 
 def background_listener():
-    """Постійно шукає 'Jarvis'"""
+    porcupine = pvporcupine.create(access_key=ACCESS_KEY, keywords=['jarvis'])
+    recorder = PvRecorder(frame_length=porcupine.frame_length)
+    
+    print("Джарвіс: Системи онлайн. Слухаю, сер.")
+
+    threading.Thread(target=terminal_listener, daemon=True).start()
+
     try:
-        porcupine = pvporcupine.create(access_key=ACCESS_KEY, keywords=['jarvis'])
-        recorder = PvRecorder(frame_length=porcupine.frame_length)
-        recorder.start()
-        
         while True:
+            # Якщо Джарвіс говорить, Picovoice просто "пропускає" кадри
+            if is_speaking:
+                time.sleep(0.1)
+                continue
+                
+            if not recorder.is_recording:
+                recorder.start()
+            
             pcm = recorder.read()
             if porcupine.process(pcm) >= 0:
-                print("\n[Активація!] Почув ім'я.")
+                print("\n[Активація!] Канал відкрито.")
                 
-                # 1. Зупиняємо рекордер Picovoice
+                # КРОК 1: Зупиняємо рекордер Picovoice миттєво
                 recorder.stop()
                 
-                # 2. Кажемо "Yes Sir" і чекаємо, поки звук закінчиться
-                speak("Yes Sir")
-                time.sleep(1) # Даємо час вимовити фразу
+                # КРОК 2: Відповідаємо (це тепер не блокує main)
+                safe_speak("Yes Sir")
                 
-                # 3. Слухаємо команду
-                listen_and_process()
+                # КРОК 3: Запускаємо діалог
+                # Ми викликаємо його без 'with jarvis_lock', щоб він міг працювати вільно
+                start_conversation(jarvis_brain, safe_speak)
                 
-                # 4. Повертаємося до чергування
-                recorder.start()
-                
+                print("[Повернення в режим очікування]")
+                # Після виходу з діалогу цикл сам повернеться до recorder.start()
     except Exception as e:
-        print(f"Помилка вуха: {e}")
-
-def main():
-    print("Джарвіс: Системи онлайн. Слухаю (Голос/Текст), сер.")
-
-    # Запуск фонового прослуховування
-    threading.Thread(target=background_listener, daemon=True).start()
-
-    # Можливість писати текстом паралельно
-    while True:
-        command = input("You: ")
-        if command.lower() in ["exit", "stop"]:
-            speak("Goodbye Sir")
-            break
-        response = jarvis_brain.process(command)
-        print("Jarvis:", response)
-        speak(response)
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
-    main()
+    background_listener()
+
+
+# import threading
+# import pvporcupine
+# from pvrecorder import PvRecorder
+# import time
+
+# # Імпортуємо ваші модулі
+# from brain.processor import Brain
+# from modules.voice_module import speak
+# from modules.speech_module import start_conversation
+
+# # Створюємо замок та статус
+# jarvis_lock = threading.Lock()
+# is_speaking = False
+# jarvis_brain = Brain()
+
+# # Налаштування Picovoice
+# ACCESS_KEY = "pSPrmyV6BT8ORuYrr2Y2vTHj/L+fHe/AbZgjcrMT5Y100FKrdAhU+Q==" 
+
+# def safe_speak(text):
+#     global is_speaking
+#     with jarvis_lock:
+#         is_speaking = True
+#         speak(text)
+#         is_speaking = False
+
+# def background_listener():
+#     """Чекає на слово 'Jarvis'"""
+#     porcupine = pvporcupine.create(access_key=ACCESS_KEY, keywords=['jarvis'])
+#     recorder = PvRecorder(frame_length=porcupine.frame_length)
+    
+#     print("Джарвіс: Системи онлайн. Слухаю, сер.")
+    
+#     try:
+#         while True:
+#             # Не слухаємо активацію, якщо вже говоримо
+#             if is_speaking or jarvis_lock.locked():
+#                 time.sleep(0.1)
+#                 continue
+                
+#             if not recorder.is_recording:
+#                 recorder.start()
+            
+#             pcm = recorder.read()
+#             if porcupine.process(pcm) >= 0:
+#                 with jarvis_lock:
+#                     print("\n[Активація!] Канал відкрито.")
+#                     recorder.stop()
+                    
+#                     safe_speak("Yes Sir")
+#                     # Запускаємо безперервний діалог
+#                     start_conversation(jarvis_brain, safe_speak)
+                    
+#                     print("[Повернення в режим очікування активації]")
+#     except Exception as e:
+#         print(f"Background Listener Error: {e}")
+
+# if __name__ == "__main__":
+#     # Запускаємо в головному потоці
+#     background_listener()
