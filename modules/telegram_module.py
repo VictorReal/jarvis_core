@@ -1,0 +1,165 @@
+import asyncio
+import os
+import time
+import threading
+import logging
+from telegram import Update, Bot
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from langdetect import detect, LangDetectException
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_USER_ID = int(os.getenv("TELEGRAM_USER_ID", "0"))
+
+class TelegramModule:
+    """Телеграм інтерфейс для Джарвіса — текст і голос."""
+
+    def __init__(self, jarvis_brain, voice_module, mode_callback=None):
+        self.brain         = jarvis_brain
+        self.voice_module  = voice_module
+        self.mode_callback = mode_callback
+        # Silent версія для Telegram — без голосу (async конфлікт)
+        self._set_mode_silent = (lambda m: mode_callback(m, silent=True)) if mode_callback else None
+        self.app          = Application.builder().token(TELEGRAM_TOKEN).build()
+
+        # Реєструємо обробник текстових повідомлень
+        self.app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
+        )
+
+    def _is_authorized(self, user_id: int) -> bool:
+        """Перевіряє чи це ти — щоб чужі не керували Джарвісом."""
+        return user_id == TELEGRAM_USER_ID
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+
+        if not self._is_authorized(user_id):
+            await update.message.reply_text("Access denied.")
+            return
+
+        user_text = update.message.text.strip()
+        
+        # ← Тепер показуємо в терміналі і HUD
+        print(f"[TELEGRAM] >>> YOU: {user_text}")
+        try:
+            from modules.hud_module import add_message
+            add_message("user", f"[TG] {user_text}")
+        except Exception:
+            pass
+
+        try:
+            from langdetect import detect, LangDetectException
+            detected = detect(user_text)
+            lang = "uk" if detected == "uk" else "en"
+        except Exception:
+            lang = "en"
+
+        print(f"[TELEGRAM] Мова: {lang.upper()}")
+
+        import re
+        lower = user_text.lower()
+
+        # Перевірка зміни режиму — до відправки в brain
+        if self._set_mode_silent:
+            if any(p in lower for p in ["iron man mode", "switch to iron man", "activate iron man"]):
+                self._set_mode_silent("iron man")
+            elif any(p in lower for p in ["home mode", "switch to home"]):
+                self._set_mode_silent("home")
+            elif "switch" in lower:  # просто "switch" — toggle
+                from modules.hud_module import hud_state
+                current = hud_state.get("mode", "HOME").lower()
+                self._set_mode_silent("iron man" if current == "home" else "home")
+
+        response = self.brain.process(user_text, lang=lang)
+
+
+        clean = re.sub(r'\[.*?\]', '', response).replace("/", " ").strip()
+        if not clean:
+            clean = "As you wish, Sir." if lang == "en" else "Як бажаєте, сер."
+
+        # Показуємо відповідь в терміналі і HUD
+        print(f"[TELEGRAM] >>> JARVIS: {clean}")
+        try:
+            from modules.hud_module import add_message
+            add_message("jarvis", f"[TG] {clean}")
+        except Exception:
+            pass
+
+        await update.message.reply_text(clean)
+        await self._send_voice(update, clean, lang)
+
+    async def _send_voice(self, update: Update, text: str, lang: str):
+        """Генерує MP3 і надсилає як голосове повідомлення."""
+        import edge_tts
+        from gtts import gTTS
+
+        filename = f"tg_voice_{int(time.time() * 1000)}.mp3"
+
+        try:
+            if lang == "uk":
+                # Українська через gTTS
+                tts = gTTS(text=text, lang="uk", slow=False)
+                tts.save(filename)
+            else:
+                # Англійська через Edge-TTS
+                communicate = edge_tts.Communicate(text, "en-GB-RyanNeural")
+                await communicate.save(filename)
+
+            # Відправляємо файл як голосове
+            with open(filename, "rb") as audio:
+                await update.message.reply_voice(voice=audio)
+
+        except Exception as e:
+            logger.error(f"[TELEGRAM VOICE ERROR] {e}")
+            await update.message.reply_text("(Voice generation failed)")
+
+        finally:
+            if os.path.exists(filename):
+                try:
+                    os.remove(filename)
+                except Exception:
+                    pass
+
+    def notify_owner(self, text: str):
+        """
+        Надсилає повідомлення власнику без очікування відповіді.
+        Безпечно викликати з будь-якого потоку.
+        """
+        if not TELEGRAM_USER_ID:
+            logger.warning("[TELEGRAM] TELEGRAM_USER_ID не задано — notify скасовано")
+            return
+
+        async def _send():
+            try:
+                bot = Bot(token=TELEGRAM_TOKEN)
+                await bot.send_message(chat_id=TELEGRAM_USER_ID, text=text)
+                logger.info(f"[TELEGRAM] Notify надіслано: {text[:60]}")
+            except Exception as e:
+                logger.error(f"[TELEGRAM] notify_owner error: {e}")
+
+        # Запускаємо в окремому event loop щоб не конфліктувати з основним
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_send())
+            loop.close()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def run_in_thread(self):
+        """Запускає Telegram бота в окремому потоці."""
+        def _run():
+            # Створюємо новий event loop для цього потоку
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            print("[TELEGRAM] Бот запущено. Очікую команди...")
+            self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        return thread

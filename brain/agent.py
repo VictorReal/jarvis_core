@@ -1,0 +1,615 @@
+from langchain_groq import ChatGroq
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    _GEMINI_AVAILABLE = True
+except ImportError:
+    _GEMINI_AVAILABLE = False
+from langchain.tools import tool
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from brain.memory_store import save_history, load_history
+from modules.people_module import get_profiles_summary
+
+import logging
+import time
+
+logger = logging.getLogger(__name__)
+
+SYSTEM_PROMPT = (
+    "You are JARVIS, Tony Stark's sophisticated AI assistant. "
+    "You have access to tools — use them when the context requires it. "
+    "CRITICAL: When using a tool, use ONLY the standard tool-calling API. "
+    "NEVER wrap tool calls in <function> tags or any other XML tags. "
+    "MANDATORY: For time/date — always call get_time. "
+    "MANDATORY: For weather — always call fetch_weather. "
+    "MANDATORY: For location — always call fetch_location. "
+    "NEVER guess or invent time, date, weather, or location — always use tools. "
+    "Always respond in 1-2 short sentences after using a tool. "
+    "Be concise and slightly sarcastic. Always address the user as Sir. "
+    "Never use markdown symbols like * or #."
+)
+
+NORMALIZE_PROMPT = (
+    "You are a music search query formatter. "
+    "Convert the input into a clean Spotify search query. "
+    "Return ONLY the search query. No arrows, no explanations, no extra text. "
+    "Examples:\n"
+    "Input: 'metalika enter sandman' → Output: 'Metallica Enter Sandman'\n"
+    "Input: 'acdc' → Output: 'AC/DC'\n"
+    "Input: 'led zep stairway' → Output: 'Led Zeppelin Stairway to Heaven'\n"
+    "Input: 'rainy mood music' → Output: 'rainy day indie'\n"
+    "IMPORTANT: Output must be a plain search string only. Nothing else."
+)
+
+
+def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=None):
+
+    def normalize_query(query: str) -> str:
+        response = llm.invoke([
+            SystemMessage(content=NORMALIZE_PROMPT),
+            HumanMessage(content=query)
+        ])
+        corrected = response.content.strip()
+        print(f"[NORMALIZE] '{query}' → '{corrected}'")
+        return corrected
+
+    # ------------------------------------------------------------------ #
+    #  Музика                                                              #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def play_music(query: str) -> str:
+        """Play music on Spotify. Use when user wants music, names an artist or song, or mentions a mood or feeling."""
+        corrected = normalize_query(query)
+        print(f"[SPOTIFY] Шукаю: '{corrected}'")
+        status = music_module.play(corrected)
+        print(f"[SPOTIFY] Результат: {status}")
+        if "PLAYING|" in status:
+            track = status.split("|")[1]
+            return f"PLAYING: {track.replace('/', ' ').replace('&', ' and ')}"
+        return status.replace("ERROR|", "")
+
+    @tool
+    def set_volume(volume: int) -> str:
+        """Set the Spotify volume. Use when user wants it louder, quieter, or specifies a percentage (0-100)."""
+        volume = max(0, min(100, volume))
+        success = music_module.set_volume(volume)
+        if success:
+            print(f"[SPOTIFY] Гучність встановлена на {volume}%")
+            return f"Volume set to {volume} percent, Sir."
+        return "Sir, I couldn't adjust the volume. Perhaps there's no active device?"
+
+    @tool
+    def stop_music(reason: str = "") -> str:
+        """Stop music. Use when user says stop, pause, silence, or wants quiet."""
+        music_module.stop()
+        return "Music stopped."
+
+    # ------------------------------------------------------------------ #
+    #  Локація / погода / маршрут                                          #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def fetch_location(query: str = "") -> str:
+        """Fetch the current location and address of the user. Call this when user asks where they are."""
+        return nav_module.get_current_address()
+
+    @tool
+    def fetch_weather(city: str = "current") -> str:
+        """Fetch weather ONLY when user explicitly asks about weather, temperature, rain, or what to wear outside."""
+        import requests
+        try:
+            if not city or city in ["current location", "user location", "my location", "current"]:
+                addr = nav_module.get_current_address()
+                city = addr.split(" in ")[-1].replace(".", "").strip()
+            url = f"https://wttr.in/{city}?format=j1&lang=en"
+            r = requests.get(url, timeout=5)
+            if r.status_code != 200:
+                return f"Weather data unavailable for {city}."
+            data = r.json()
+            nearest = data.get("nearest_area", [{}])[0]
+            city_name = nearest.get("areaName", [{}])[0].get("value", city)
+            country   = nearest.get("country", [{}])[0].get("value", "")
+            current   = data.get("current_condition", [{}])[0]
+            desc      = current.get("weatherDesc", [{}])[0].get("value", "—")
+            temp_c    = current.get("temp_C", "?")
+            feels_c   = current.get("FeelsLikeC", "?")
+            wind_kmph = current.get("windspeedKmph", "?")
+            wind_dir  = current.get("winddir16Point", "")
+            humidity  = current.get("humidity", "?")
+            location  = f"{city_name}, {country}" if country else city_name
+            return (
+                f"{location}\n"
+                f"{desc}  {temp_c}°C  (feels {feels_c}°C)\n"
+                f"Wind: {wind_dir} {wind_kmph} km/h   Humidity: {humidity}%"
+            )
+        except Exception as e:
+            return f"Weather service error: {e}"
+
+    @tool
+    def get_route(destination: str) -> str:
+        """Get route to a place. Use when asked how to get somewhere or distance to a place."""
+        return nav_module.get_route_to(destination)
+
+    # ------------------------------------------------------------------ #
+    #  Система                                                             #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def system_status(reason: str = "") -> str:
+        """Check system status temperature CPU RAM. Use when asked about systems diagnostics health."""
+        return sensors_module.get_system_report()
+
+    @tool
+    def open_armor(reason: str = "") -> str:
+        """Open helmet faceplate. Use when user wants to open mask or feels hot or stuffy."""
+        return "ARMOR_OPEN"
+
+    @tool
+    def close_armor(reason: str = "") -> str:
+        """Close helmet faceplate. Use when user wants to close mask or needs protection."""
+        return "ARMOR_CLOSE"
+
+    @tool
+    def open_app(app_name: str) -> str:
+        """Open an application on the computer. Use when user asks to open browser, notepad, calculator, spotify, any app."""
+        from app_launcher import launch
+        return launch(app_name)
+
+    @tool
+    def search_web(query: str) -> str:
+        """Open Google search in browser. Use when user says google, search, find online, or look up something."""
+        import webbrowser
+        url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+        webbrowser.open(url)
+        return f"Opened search for '{query}', Sir."
+
+    @tool
+    def take_screenshot(filename: str = "") -> str:
+        """Take a screenshot of the current screen. Use when user asks to capture screen or screenshot."""
+        try:
+            from brain.system_actions import take_screenshot as _snap
+            path = _snap(filename)
+            return f"Screenshot saved to {path}, Sir."
+        except Exception as e:
+            return f"Sir, screenshot failed: {e}"
+
+    @tool
+    def lock_screen(reason: str = "") -> str:
+        """Lock the computer screen. Use when user says lock screen, lock computer, or going away."""
+        try:
+            from brain.system_actions import lock_screen as _lock
+            result = _lock()
+            if result == "ok":
+                return "Screen locked, Sir. Stay safe."
+            return f"Sir, I couldn't lock the screen: {result}"
+        except Exception as e:
+            return f"Sir, lock failed: {e}"
+
+    # ------------------------------------------------------------------ #
+    #  Люди                                                                #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def remember_person(name: str, fact: str) -> str:
+        """Save a fact about a person. Use when user introduces someone or mentions something about a person."""
+        from modules.people_module import get_profile, create_profile, add_fact
+        profile = get_profile(name)
+        if not profile:
+            create_profile(name)
+            print(f"[PEOPLE] Новий профіль: {name}")
+        add_fact(name, fact)
+        return f"Noted. I'll remember that {name} {fact}, Sir."
+
+    @tool
+    def recall_person(name: str) -> str:
+        """Recall everything Jarvis knows about a person from the local database. ALWAYS call this tool when user asks what you know about someone or asks about a specific person."""
+        from modules.people_module import find_profile_by_name
+        result = find_profile_by_name(name)
+        if not result:
+            return f"I don't have any information about {name} yet, Sir."
+        if isinstance(result, dict) and result.get("multiple"):
+            names = [m["name"] for m in result["matches"]]
+            return f"Sir, I know multiple people named {name}: {', '.join(names)}. Could you clarify?"
+        facts = result.get("facts", [])
+        relationship = result.get("relationship", "acquaintance")
+        facts_str = "; ".join(facts) if facts else "nothing specific yet"
+        return f"{result['name']} is your {relationship}. I know: {facts_str}."
+
+    @tool
+    def introduce_person(name: str, relationship: str, personality: str = "polite") -> str:
+        """Create a profile for a new person. Use ONLY when user explicitly states their name."""
+        from modules.people_module import create_profile, find_profile_by_name
+        existing = find_profile_by_name(name)
+        if existing and not isinstance(existing, dict):
+            return f"Sir, I already know someone named {name}. Is this the same person?"
+        create_profile(name, relationship, personality)
+        return f"Pleasure to meet you, {name}. I'll remember you as {relationship} of Sir's."
+
+    # ------------------------------------------------------------------ #
+    #  Час / таймер / нагадування                                          #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def get_time(query: str = "") -> str:
+        """Get current time and date. Use when user asks what time it is, what day it is, or current date."""
+        from datetime import datetime
+        now = datetime.now()
+        return (
+            f"Current time: {now.strftime('%H:%M')}. "
+            f"Date: {now.strftime('%A, %d %B %Y')}."
+        )
+
+    @tool
+    def set_timer(minutes: int) -> str:
+        """Set a silent timer for X minutes. Use when user says set timer for N minutes without a specific message."""
+        import threading
+        def _ring():
+            time.sleep(minutes * 60)
+            print(f"\n[TIMER] ⏰ {minutes} хвилин минуло!")
+        threading.Thread(target=_ring, daemon=True).start()
+        return f"Timer set for {minutes} minutes, Sir."
+
+    @tool
+    def set_reminder(message: str, minutes: float) -> str:
+        """Set a voiced reminder. Use when user says remind me to X in N minutes.
+        message: what to remind about. minutes: how many minutes from now (can be decimal)."""
+        if reminder_module is None:
+            return "Sir, the reminder system is offline."
+        seconds = int(minutes * 60)
+        reminder_module.set(message, seconds)
+        if minutes < 1:
+            time_str = f"{int(seconds)} seconds"
+        elif minutes == int(minutes):
+            time_str = f"{int(minutes)} minute{'s' if minutes != 1 else ''}"
+        else:
+            time_str = f"{minutes:.1f} minutes"
+        return f"Reminder set for {time_str} from now: '{message}', Sir."
+
+    # ------------------------------------------------------------------ #
+    #  Логування дня                                                       #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def summarize_day(query: str = "") -> str:
+        """Read and summarize today's activity log from file. ALWAYS call this tool when user asks what we did today, daily recap, or summary of the day. NEVER summarize from memory alone."""
+        from day_logger import get_log_summary_prompt
+        prompt = get_log_summary_prompt()
+        if not prompt:
+            return "Sir, the activity log is empty. Quite an uneventful day so far."
+        try:
+            response = llm.invoke([
+                SystemMessage(content="You are JARVIS. Summarize the day's activity concisely and wittily in 3-5 sentences."),
+                HumanMessage(content=prompt)
+            ])
+            return response.content.strip()
+        except Exception as e:
+            return f"Sir, I couldn't generate the summary: {e}"
+
+    # ------------------------------------------------------------------ #
+    #  Gmail                                                               #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def check_email(max_results: int = 5) -> str:
+        """Check unread emails. Use when user asks about emails, inbox, new messages, or any mail."""
+        try:
+            from modules.gmail_module import GmailModule
+            return GmailModule().get_unread_summary(max_results)
+        except Exception as e:
+            return f"Sir, email system is unavailable: {e}"
+
+    @tool
+    def send_email(to: str, subject: str, body: str) -> str:
+        """Send an email. Use when user says send email/message to someone.
+        to: recipient email or name. subject: email subject. body: email text."""
+        try:
+            from modules.gmail_module import GmailModule
+            gm = GmailModule()
+            # Якщо передали ім'я а не email — шукаємо адресу
+            if "@" not in to:
+                found = gm.find_sender_email(to)
+                if found:
+                    to = found
+                else:
+                    return f"Sir, I couldn't find an email address for '{to}'."
+            return gm.send_email(to, subject, body)
+        except Exception as e:
+            return f"Sir, I couldn't send the email: {e}"
+
+    # ------------------------------------------------------------------ #
+    #  Google Calendar                                                     #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def check_calendar(hours: int = 24) -> str:
+        """Check upcoming calendar events. Use when user asks about schedule, plans, meetings, or what's next.
+        hours: how many hours ahead to look (default 24)."""
+        try:
+            from modules.calendar_module import CalendarModule
+            return CalendarModule().get_upcoming_summary(hours)
+        except Exception as e:
+            return f"Sir, calendar system is unavailable: {e}"
+
+    @tool
+    def add_calendar_event(title: str, date: str, time: str,
+                           duration_minutes: int = 60, location: str = "") -> str:
+        """Add event to Google Calendar. Use when user says add event, schedule meeting, remind me on date.
+        title: event name. date: YYYY-MM-DD. time: HH:MM (24h). duration_minutes: default 60. location: optional."""
+        try:
+            from modules.calendar_module import CalendarModule
+            from datetime import datetime, timedelta
+
+            start_dt = datetime.strptime(date + " " + time, "%Y-%m-%d %H:%M")
+            end_dt   = start_dt + timedelta(minutes=duration_minutes)
+
+            tz = "+03:00"
+            start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%S") + tz
+            end_iso   = end_dt.strftime("%Y-%m-%dT%H:%M:%S") + tz
+
+            return CalendarModule().create_event(title, start_iso, end_iso, location)
+        except Exception as e:
+            return f"Sir, I couldn't create the event: {e}"
+
+    # ------------------------------------------------------------------ #
+    #  Contacts                                                            #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def find_contact(name: str) -> str:
+        """Find a contact by name in Google Contacts. ALWAYS call this tool when user asks for phone number, email, or contact info of any person. NEVER guess or invent phone numbers."""
+        try:
+            from modules.contacts_module import ContactsModule
+            return ContactsModule().find_summary(name)
+        except Exception as e:
+            return f"Sir, contacts system unavailable: {e}"
+
+    # ------------------------------------------------------------------ #
+    #  YouTube                                                             #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def open_youtube(query: str) -> str:
+        """Search YouTube and open the top result in browser. Use when user says find video, watch, play on youtube, show me."""
+        try:
+            from modules.youtube_module import YouTubeModule
+            return YouTubeModule().search_and_open(query)
+        except Exception as e:
+            return f"Sir, YouTube is unavailable: {e}"
+
+    @tool
+    def search_youtube(query: str) -> str:
+        """Search YouTube and open the top result. Use when user says search youtube, find video, or asks about videos on a topic."""
+        try:
+            from modules.youtube_module import YouTubeModule
+            return YouTubeModule().search_and_open(query)
+        except Exception as e:
+            return f"Sir, YouTube search failed: {e}"
+
+    # ------------------------------------------------------------------ #
+    #  API Guard                                                           #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def api_usage_status(reason: str = "") -> str:
+        """Show real Google API usage from file. ALWAYS call this tool when user asks about api usage, quota, limits, or how many calls left. NEVER estimate or guess the numbers."""
+        try:
+            from api_guard import guard
+            return guard.status()
+        except Exception as e:
+            return f"Sir, couldn't retrieve API stats: {e}"
+
+    # ------------------------------------------------------------------ #
+    #  Vision                                                              #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def analyze_screenshot(reason: str = "") -> str:
+        """Analyze the latest screenshot using AI vision. Use when user says what's on screen, analyze screenshot, describe screen."""
+        try:
+            from modules.vision_module import VisionModule
+            return VisionModule().analyze_latest_screenshot()
+        except Exception as e:
+            return f"Sir, vision system unavailable: {e}"
+
+    @tool
+    def read_text_from_screenshot(reason: str = "") -> str:
+        """Read text from the latest screenshot using OCR. Use when user says read text on screen, what does it say, extract text."""
+        try:
+            from modules.vision_module import VisionModule
+            from pathlib import Path
+            screenshots_dir = Path("screenshots")
+            files = sorted(screenshots_dir.glob("*.png"), key=lambda f: f.stat().st_mtime)
+            if not files:
+                return "Sir, no screenshots found. Take a screenshot first."
+            return VisionModule().read_text(str(files[-1]))
+        except Exception as e:
+            return f"Sir, OCR failed: {e}"
+
+    # ------------------------------------------------------------------ #
+
+    return [
+        play_music, set_volume, stop_music,
+        fetch_location, fetch_weather, get_route,
+        system_status, open_armor, close_armor,
+        open_app, search_web, take_screenshot, lock_screen,
+        remember_person, recall_person, introduce_person,
+        get_time, set_timer, set_reminder,
+        summarize_day,
+        check_email, send_email,
+        check_calendar, add_calendar_event,
+        find_contact,
+        open_youtube, search_youtube,
+        analyze_screenshot, read_text_from_screenshot,
+        api_usage_status,
+    ]
+
+
+class JarvisAgent:
+    def __init__(self, music_module, nav_module, sensors_module, reminder_module=None):
+        self.models = [
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "llama-3.1-8b-instant",
+            "gemma2-9b-it",
+            "gemini",   # резервна — Google Gemini
+        ]
+        self.current_model_index = 0
+
+        self.llm = self._create_llm(self.models[0])
+        self.llm_normalize = self._create_llm(self.models[0], max_tokens=15)
+
+        self.music_module = music_module
+        self.reminder_module = reminder_module
+        self.tools = create_tools(music_module, nav_module, sensors_module, self.llm_normalize, reminder_module)
+        self.tools_map = {t.name: t for t in self.tools}
+        self.llm_with_tools = self.llm.bind_tools(self.tools)
+        self.chat_history = load_history()
+
+    def _create_llm(self, model: str, max_tokens: int = 80):
+        if model == "gemini":
+            import os
+            if _GEMINI_AVAILABLE and os.getenv("GOOGLE_API_KEY"):
+                return ChatGoogleGenerativeAI(
+                    model="gemini-1.5-flash",
+                    temperature=0.5,
+                    max_output_tokens=max_tokens * 4,  # Gemini рахує інакше
+                    google_api_key=os.getenv("GOOGLE_API_KEY"),
+                )
+            # Якщо Gemini недоступний — повертаємось на першу Groq модель
+            return ChatGroq(model=self.models[0], temperature=0.5, max_tokens=max_tokens)
+        return ChatGroq(model=model, temperature=0.5, max_tokens=max_tokens)
+
+    def _switch_to_next_model(self):
+        self.current_model_index += 1
+        if self.current_model_index >= len(self.models):
+            self.current_model_index = 0
+            print("[AGENT] Всі моделі вичерпали ліміт. Повертаємось на основну.")
+            return False
+        new_model = self.models[self.current_model_index]
+        print(f"[AGENT] Переключаємось на модель: {new_model}")
+        self.llm = self._create_llm(new_model)
+        self.llm_normalize = self._create_llm(new_model, max_tokens=15)
+        self.llm_with_tools = self.llm.bind_tools(self.tools)
+        try:
+            from modules.hud_module import update_hud
+            update_hud("model", new_model.split("/")[-1])
+        except Exception:
+            pass
+        return True
+
+    def ask(self, user_input: str, lang: str = "en") -> str:
+        lang_instruction = (
+            "Respond in Ukrainian language only. Address user as 'Сер'."
+            if lang == "uk"
+            else "Respond in English language only. Address user as 'Sir'."
+        )
+        people_context = get_profiles_summary()
+        system_with_lang = (
+            SYSTEM_PROMPT
+            + f" {lang_instruction}"
+            + f" People you know: {people_context}."
+        )
+
+        for attempt in range(3):
+            try:
+                messages = (
+                    [SystemMessage(content=system_with_lang)]
+                    + self.chat_history
+                    + [HumanMessage(content=user_input)]
+                )
+
+                response = self.llm_with_tools.invoke(messages)
+
+                if response.tool_calls:
+                    messages.append(response)
+                    for tool_call in response.tool_calls:
+                        tool_name = tool_call["name"].removeprefix("f.")
+                        tool_args = tool_call["args"]
+                        tool_id = tool_call["id"]
+                        print(f"[AGENT] Викликає: {tool_name}({tool_args})")
+
+                        if tool_name in self.tools_map:
+                            tool_result = self.tools_map[tool_name].invoke(tool_args)
+                        else:
+                            tool_result = f"Tool {tool_name} not found."
+
+                        # HUD оновлення після тулзи
+                        try:
+                            from modules.hud_module import update_hud
+                            result_str = str(tool_result)
+                            if tool_name == "fetch_weather":
+                                update_hud("weather", result_str)
+                            elif tool_name == "play_music":
+                                if "PLAYING:" in result_str:
+                                    track = result_str.replace("PLAYING:", "").strip()
+                                    update_hud("current_song", track)
+                                    try:
+                                        devices = self.music_module.sp.devices()
+                                        active = [d for d in devices.get("devices", []) if d["is_active"]]
+                                        if active:
+                                            update_hud("volume", active[0].get("volume_percent", 0))
+                                    except Exception:
+                                        pass
+                            elif tool_name == "stop_music":
+                                update_hud("current_song", "No music playing")
+                                update_hud("volume", 0)
+                            elif tool_name == "set_volume":
+                                vol = tool_args.get("volume", tool_args.get("volume_percent", 0))
+                                update_hud("volume", vol)
+                        except Exception:
+                            pass
+
+                        messages.append(ToolMessage(
+                            content=str(tool_result),
+                            tool_call_id=tool_id
+                        ))
+
+                    final = self.llm_with_tools.invoke(messages)
+                    answer = final.content.strip()
+                else:
+                    answer = response.content.strip()
+
+                import re
+                if "<function=" in answer:
+                    answer = answer.split("<function=")[0].strip()
+                answer = re.sub(r"\(?\w+>\s*\)\s*\{[^}]*\}", "", answer).strip()
+                answer = re.sub(r'\{["\w].*?\}$', "", answer, flags=re.DOTALL).strip()
+                answer = answer.replace("*", "").replace("#", "")
+
+                self.chat_history.append(HumanMessage(content=user_input))
+                self.chat_history.append(AIMessage(content=answer))
+                save_history(self.chat_history)
+
+                if len(self.chat_history) > 20:
+                    self.chat_history = self.chat_history[-20:]
+
+                try:
+                    from modules.hud_module import update_hud
+                    from modules.people_module import get_all_profiles
+                    update_hud("people", get_all_profiles())
+                except Exception:
+                    pass
+
+                return answer
+
+            except Exception as e:
+                error_str = str(e)
+                print(f"[AGENT] Спроба {attempt + 1}/3 невдала: {e}")
+
+                if "rate_limit_exceeded" in error_str or "429" in error_str:
+                    switched = self._switch_to_next_model()
+                    if switched:
+                        continue
+                    return "Сер, всі системи тимчасово недоступні." if lang == "uk" else "Sir, all AI systems are temporarily unavailable."
+
+                if "tool_use_failed" in error_str or "failed_generation" in error_str:
+                    self._switch_to_next_model()
+                    continue
+
+                if attempt == 2:
+                    return "Сер, виникла помилка." if lang == "uk" else "Sir, my reasoning systems encountered an error."
+                time.sleep(1)
+
+    def clear_history(self):
+        from brain.memory_store import clear_history as delete_file
+        self.chat_history = []
+        delete_file()

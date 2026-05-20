@@ -1,0 +1,34 @@
+{
+  "saved_at": "2026-05-21T01:32:35.169751",
+  "total": 7,
+  "messages": [
+    {
+      "role": "user",
+      "content": "find alex phone number"
+    },
+    {
+      "role": "assistant",
+      "content": "Sir, I couldn't find anyone named 'Alex' in your contacts."
+    },
+    {
+      "role": "user",
+      "content": "show api usage"
+    },
+    {
+      "role": "assistant",
+      "content": "Sir, here's the current API usage status."
+    },
+    {
+      "role": "assistant",
+      "content": "Sir, API usage is well within limits."
+    },
+    {
+      "role": "user",
+      "content": "what did we do today"
+    },
+    {
+      "role": "assistant",
+      "content": "Sir, we've had a rather eventful day. He started the morning with a metal music session, then took a break to check his emails. After that, he spent some time browsing YouTube and even sent a message to someone. I've also been keeping an eye on the system diagnostics, and everything seems to be in order."
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+requests
+geopy
+SpeechRecognition
+sounddevice
+numpy
+scipy
+pvrecorder
+pvporcupine
+python-dotenv
+opencv-python
+face_recognition
+access-points
+spotipy
+langdetect
+flask flask-socketio
