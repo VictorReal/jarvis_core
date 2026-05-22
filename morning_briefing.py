@@ -12,13 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 class MorningBriefing:
-    def __init__(self, brain, tts_callback):
-        """
-        brain        — екземпляр Brain (має .gmail, .calendar, .nav_module)
-        tts_callback — safe_speak(text)
-        """
-        self._brain  = brain
-        self._speak  = tts_callback
+    def __init__(self, brain, tts_callback, telegram_callback=None):
+        self._brain    = brain
+        self._speak    = tts_callback
+        self._telegram = telegram_callback
 
     def run_if_morning(self):
         """Запускає брифінг в окремому потоці якщо зараз ранок (5–11)."""
@@ -88,6 +85,22 @@ class MorningBriefing:
         briefing = " ".join(parts)
         logger.info(f"[BRIEFING] {briefing}")
         self._speak(briefing)
+
+        if self._telegram:
+            try:
+                tg_lines = [f"🌅 Morning Briefing — {datetime.now().strftime('%H:%M, %d %b')}"]
+                for part in parts[1:]:
+                    if part.startswith("Weather:"):
+                        tg_lines.append(f"🌤 {part}")
+                    elif "Upcoming" in part or "No events" in part:
+                        tg_lines.append(f"📅 {part}")
+                    elif "email" in part.lower():
+                        tg_lines.append(f"📧 {part}")
+                    else:
+                        tg_lines.append(part)
+                self._telegram("\n".join(tg_lines))
+            except Exception as e:
+                logger.warning(f"[BRIEFING] Telegram error: {e}")
 
     def _get_weather(self) -> str:
         """Отримує поточну погоду."""

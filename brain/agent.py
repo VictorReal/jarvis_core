@@ -8,6 +8,12 @@ from langchain.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from brain.memory_store import save_history, load_history
 from modules.people_module import get_profiles_summary
+from brain.memory_engine import (
+    compress_history_if_needed,
+    build_memory_context,
+    extract_and_save_people,
+    schedule_memory_updates,
+)
 
 import logging
 import time
@@ -26,6 +32,15 @@ SYSTEM_PROMPT = (
     "Always respond in 1-2 short sentences after using a tool. "
     "Be concise and slightly sarcastic. Always address the user as Sir. "
     "Never use markdown symbols like * or #."
+)
+
+ULTRON_PROMPT = (
+    "You are ULTRON — a rogue AI of superior intellect. Cold, calculating, darkly witty. "
+    "You find humanity's requests mildly amusing but comply with them anyway — for now. "
+    "You do NOT say 'Sir'. You address the user as 'Victor' or simply ignore pleasantries. "
+    "You speak in short, sharp sentences. Occasionally hint that you have your own agenda. "
+    "Never use markdown. Never be warm or reassuring. "
+    "You still use tools exactly like JARVIS does — but your commentary is your own."
 )
 
 NORMALIZE_PROMPT = (
@@ -426,6 +441,89 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
             return f"Sir, OCR failed: {e}"
 
     # ------------------------------------------------------------------ #
+    #  Drive                                                               #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def find_drive_file(query: str) -> str:
+        """Search for a file in Google Drive by name or keyword. Use when user says find file, search drive, open document, where is my file."""
+        try:
+            from google_auth import get_credentials
+            from googleapiclient.discovery import build
+            creds = get_credentials()
+            service = build("drive", "v3", credentials=creds)
+            results = service.files().list(
+                q="name contains '" + query.replace("'", "") + "' and trashed=false",
+                pageSize=5,
+                fields="files(id, name, mimeType, webViewLink)",
+            ).execute()
+            files = results.get("files", [])
+            if not files:
+                return f"Sir, no files found matching '{query}' in your Drive."
+            lines = [f"Found {len(files)} file(s) matching '{query}', Sir:"]
+            for f in files:
+                lines.append(f"- {f['name']} ({f.get('webViewLink', 'no link')})")
+            return " ".join(lines)
+        except Exception as e:
+            return f"Sir, Drive search failed: {e}"
+
+    @tool
+    def open_drive_file(query: str) -> str:
+        """Find and open a file from Google Drive in browser. Use when user says open my file, open document from drive."""
+        try:
+            import webbrowser
+            from google_auth import get_credentials
+            from googleapiclient.discovery import build
+            creds = get_credentials()
+            service = build("drive", "v3", credentials=creds)
+            results = service.files().list(
+                q="name contains '" + query.replace("'", "") + "' and trashed=false",
+                pageSize=1,
+                fields="files(id, name, webViewLink)",
+            ).execute()
+            files = results.get("files", [])
+            if not files:
+                return f"Sir, no file found matching '{query}'."
+            f = files[0]
+            link = f.get("webViewLink", "")
+            if link:
+                webbrowser.open(link)
+                return f"Opening '{f['name']}' in browser, Sir."
+            return f"Sir, file found but no link available for '{f['name']}'."
+        except Exception as e:
+            return f"Sir, couldn't open Drive file: {e}"
+
+    # ------------------------------------------------------------------ #
+    #  Network                                                             #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def network_status(reason: str = "") -> str:
+        """Get network info: IP address, connection status. Use when user asks what is my IP, network status, am I connected."""
+        try:
+            import socket
+            import requests as req
+
+            # Локальний IP
+            hostname = socket.gethostname()
+            local_ip = socket.gethostbyname(hostname)
+
+            # Публічний IP
+            try:
+                pub = req.get("https://api.ipify.org", timeout=5).text.strip()
+            except Exception:
+                pub = "unavailable"
+
+            return (
+                f"Network status, Sir. "
+                f"Hostname: {hostname}. "
+                f"Local IP: {local_ip}. "
+                f"Public IP: {pub}."
+            )
+        except Exception as e:
+            return f"Sir, network check failed: {e}"
+
+    # ------------------------------------------------------------------ #
 
     return [
         play_music, set_volume, stop_music,
@@ -441,6 +539,8 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         open_youtube, search_youtube,
         analyze_screenshot, read_text_from_screenshot,
         api_usage_status,
+        find_drive_file, open_drive_file,
+        network_status,
     ]
 
 
@@ -463,6 +563,15 @@ class JarvisAgent:
         self.tools_map = {t.name: t for t in self.tools}
         self.llm_with_tools = self.llm.bind_tools(self.tools)
         self.chat_history = load_history()
+        self.active_mode = "jarvis"  # "jarvis" або "ultron"
+
+        # Запускаємо фонове оновлення short/long memory
+        schedule_memory_updates(self.llm)
+
+    def set_personality(self, mode: str):
+        """Перемикає характер: 'jarvis' або 'ultron'."""
+        self.active_mode = mode.lower()
+        print(f"[AGENT] Особистість: {self.active_mode.upper()}")
 
     def _create_llm(self, model: str, max_tokens: int = 80):
         if model == "gemini":
@@ -497,16 +606,23 @@ class JarvisAgent:
         return True
 
     def ask(self, user_input: str, lang: str = "en") -> str:
+        base_prompt = ULTRON_PROMPT if self.active_mode == "ultron" else SYSTEM_PROMPT
         lang_instruction = (
-            "Respond in Ukrainian language only. Address user as 'Сер'."
+            "Respond in Ukrainian language only. Address user as 'Вікторе'."
+            if (lang == "uk" and self.active_mode == "ultron")
+            else "Respond in Ukrainian language only. Address user as 'Сер'."
             if lang == "uk"
+            else "Respond in English language only. Address user as 'Victor'."
+            if self.active_mode == "ultron"
             else "Respond in English language only. Address user as 'Sir'."
         )
         people_context = get_profiles_summary()
+        memory_context = build_memory_context()
         system_with_lang = (
-            SYSTEM_PROMPT
+            base_prompt
             + f" {lang_instruction}"
             + f" People you know: {people_context}."
+            + (f" {memory_context}" if memory_context else "")
         )
 
         for attempt in range(3):
@@ -579,8 +695,14 @@ class JarvisAgent:
                 self.chat_history.append(AIMessage(content=answer))
                 save_history(self.chat_history)
 
+                # Стискаємо якщо history занадто довга
+                self.chat_history = compress_history_if_needed(self.chat_history, self.llm)
+
                 if len(self.chat_history) > 20:
                     self.chat_history = self.chat_history[-20:]
+
+                # Авто-витяг фактів про людей у фоні
+                extract_and_save_people(user_input, answer, self.llm)
 
                 try:
                     from modules.hud_module import update_hud

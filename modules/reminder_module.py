@@ -30,7 +30,7 @@ class ReminderModule:
         Встановлює нагадування через `seconds` секунд з текстом `message`.
         Повертає людино-читаний рядок для Джарвіса.
         """
-        reminder_id = f"r_{int(time.time())}"
+        reminder_id = "r_" + str(int(time.time()))
         fire_at = datetime.now() + timedelta(seconds=seconds)
 
         timer = threading.Timer(seconds, self._fire, args=[reminder_id, message])
@@ -38,9 +38,15 @@ class ReminderModule:
         timer.start()
 
         with self._lock:
-            self._active[reminder_id] = timer
+            self._active[reminder_id] = {
+                "timer":    timer,
+                "message":  message,
+                "fire_at":  fire_at,
+            }
 
-        logger.info(f"[REMINDER] Встановлено '{message}' о {fire_at.strftime('%H:%M:%S')}")
+        self._push_hud()
+        self._start_hud_ticker()
+        logger.info("[REMINDER] Встановлено '" + message + "' о " + fire_at.strftime('%H:%M:%S'))
         return reminder_id
 
     def cancel(self, reminder_id: str) -> bool:
@@ -62,10 +68,44 @@ class ReminderModule:
     #  Внутрішнє                                                           #
     # ------------------------------------------------------------------ #
 
+    def _push_hud(self):
+        """Оновлює панель нагадувань в HUD."""
+        try:
+            from modules.hud_module import update_reminders
+            from datetime import datetime as dt
+            now = dt.now()
+            items = []
+            with self._lock:
+                for v in self._active.values():
+                    if not isinstance(v, dict):
+                        continue
+                    secs_left = max(0, int((v["fire_at"] - now).total_seconds()))
+                    if secs_left >= 60:
+                        tl = str(secs_left // 60) + "m"
+                    else:
+                        tl = str(secs_left) + "s"
+                    items.append({"message": v["message"], "time_left": tl})
+            update_reminders(items)
+        except Exception:
+            pass
+
+    def _start_hud_ticker(self):
+        """Фоновий потік — оновлює таймер в HUD кожні 10 сек."""
+        def _tick():
+            while True:
+                with self._lock:
+                    has_active = bool(self._active)
+                if not has_active:
+                    break
+                self._push_hud()
+                time.sleep(10)
+        threading.Thread(target=_tick, daemon=True).start()
+
     def _fire(self, reminder_id: str, message: str):
         """Викликається Timer-ом коли час вийшов."""
         with self._lock:
             self._active.pop(reminder_id, None)
+        self._push_hud()
 
         alert = f"Sir, reminder: {message}"
         logger.info(f"[REMINDER] 🔔 {alert}")

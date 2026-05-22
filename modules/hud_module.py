@@ -25,6 +25,7 @@ hud_state = {
     "ram": 0,
     "mode": "HOME",
     "model": "llama-3.3-70b",
+    "next_event": None,
 }
 
 HTML_TEMPLATE = """
@@ -32,6 +33,7 @@ HTML_TEMPLATE = """
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>JARVIS HUD</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <style>
@@ -39,13 +41,37 @@ HTML_TEMPLATE = """
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
+  :root {
+    --hud-accent: #00d4ff;
+    --hud-accent2: #00ff88;
+    --hud-accent-dim: #00d4ff88;
+    --hud-accent-faint: #00d4ff22;
+    --hud-accent-trace: #00d4ff11;
+    --hud-glow: #00d4ff55;
+    --hud-bg: #003355;
+    --reactor-color1: #00d4ff;
+    --reactor-color2: #0044aa;
+  }
+
+  body.ultron-mode {
+    --hud-accent: #ff2200;
+    --hud-accent2: #ff6600;
+    --hud-accent-dim: #ff220088;
+    --hud-accent-faint: #ff220022;
+    --hud-accent-trace: #ff220011;
+    --hud-glow: #ff220055;
+    --hud-bg: #1a0000;
+    --reactor-color1: #ff2200;
+    --reactor-color2: #660000;
+  }
+
   body {
     background: #000;
-    color: #00d4ff;
+    color: var(--hud-accent);
     font-family: 'Share Tech Mono', monospace;
     height: 100vh;
     overflow: hidden;
-    background-image: radial-gradient(ellipse at center, #001a2e 0%, #000 70%);
+    background-image: radial-gradient(ellipse at center, var(--hud-bg) 0%, #000 70%);
   }
 
   .scanline {
@@ -63,7 +89,7 @@ HTML_TEMPLATE = """
   .grid {
     display: grid;
     grid-template-columns: 280px 1fr 280px;
-    grid-template-rows: 80px 1fr 180px;
+    grid-template-rows: 80px 1fr 80px;
     height: 100vh;
     gap: 1px;
     padding: 8px;
@@ -75,8 +101,12 @@ HTML_TEMPLATE = """
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid #00d4ff33;
+    border-bottom: 1px solid var(--hud-accent-faint);
     padding: 0 20px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: #000;
   }
 
   .logo {
@@ -84,8 +114,8 @@ HTML_TEMPLATE = """
     font-size: 28px;
     font-weight: 900;
     letter-spacing: 8px;
-    color: #00d4ff;
-    text-shadow: 0 0 20px #00d4ff, 0 0 40px #00d4ff55;
+    color: var(--hud-accent);
+    text-shadow: 0 0 20px var(--hud-accent), 0 0 40px var(--hud-glow);
   }
 
   .status-pill {
@@ -115,13 +145,13 @@ HTML_TEMPLATE = """
   }
 
   .datetime { text-align: right; font-family: 'Orbitron', sans-serif; }
-  .time-display { font-size: 24px; font-weight: 700; color: #00d4ff; }
-  .date-display { font-size: 11px; color: #00d4ff88; letter-spacing: 2px; }
+  .time-display { font-size: 24px; font-weight: 700; color: var(--hud-accent); }
+  .date-display { font-size: 11px; color: var(--hud-accent-dim); letter-spacing: 2px; }
 
   /* PANELS */
   .panel {
-    border: 1px solid #00d4ff22;
-    background: rgba(0, 20, 40, 0.6);
+    border: 1px solid var(--hud-accent-faint);
+    background: rgba(0, 10, 20, 0.6);
     padding: 16px;
     position: relative;
     overflow: hidden;
@@ -132,8 +162,8 @@ HTML_TEMPLATE = """
     position: absolute;
     top: 0; left: 0;
     width: 40px; height: 40px;
-    border-top: 2px solid #00d4ff;
-    border-left: 2px solid #00d4ff;
+    border-top: 2px solid var(--hud-accent);
+    border-left: 2px solid var(--hud-accent);
   }
 
   .panel::after {
@@ -141,34 +171,34 @@ HTML_TEMPLATE = """
     position: absolute;
     bottom: 0; right: 0;
     width: 40px; height: 40px;
-    border-bottom: 2px solid #00d4ff;
-    border-right: 2px solid #00d4ff;
+    border-bottom: 2px solid var(--hud-accent);
+    border-right: 2px solid var(--hud-accent);
   }
 
   .panel-title {
     font-family: 'Orbitron', sans-serif;
     font-size: 10px;
     letter-spacing: 4px;
-    color: #00d4ff88;
+    color: var(--hud-accent-dim);
     margin-bottom: 12px;
     text-transform: uppercase;
   }
 
   /* LEFT PANEL */
-  .left-panel { grid-row: 2; }
+  .left-panel { grid-row: 2; grid-column: 1; }
 
   .sys-item { margin-bottom: 14px; }
 
   .sys-label {
     font-size: 10px;
-    color: #00d4ff66;
+    color: var(--hud-accent-dim);
     letter-spacing: 2px;
     margin-bottom: 4px;
   }
 
   .sys-bar {
     height: 4px;
-    background: #00d4ff11;
+    background: var(--hud-accent-trace);
     border-radius: 2px;
     overflow: hidden;
     margin-bottom: 2px;
@@ -176,23 +206,25 @@ HTML_TEMPLATE = """
 
   .sys-bar-fill {
     height: 100%;
-    background: linear-gradient(90deg, #00d4ff, #0088ff);
+    background: linear-gradient(90deg, var(--hud-accent), #0055cc);
     border-radius: 2px;
     transition: width 1s ease;
-    box-shadow: 0 0 8px #00d4ff;
+    box-shadow: 0 0 8px var(--hud-accent);
   }
 
   .sys-value {
     font-size: 18px;
     font-weight: 700;
-    color: #00d4ff;
+    color: var(--hud-accent);
     font-family: 'Orbitron', sans-serif;
   }
 
   .music-info {
-    margin-top: 16px;
-    padding-top: 16px;
-    border-top: 1px solid #00d4ff22;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--hud-accent-faint);
+    max-height: 140px;
+    overflow: hidden;
   }
 
   .song-name {
@@ -215,7 +247,7 @@ HTML_TEMPLATE = """
 
   .volume-bar {
     height: 3px;
-    background: #00d4ff11;
+    background: var(--hud-accent-trace);
     border-radius: 2px;
     margin-top: 6px;
     overflow: hidden;
@@ -223,10 +255,10 @@ HTML_TEMPLATE = """
 
   .volume-fill {
     height: 100%;
-    background: #00d4ff;
+    background: var(--hud-accent);
     border-radius: 2px;
     transition: width 0.5s;
-    box-shadow: 0 0 6px #00d4ff;
+    box-shadow: 0 0 6px var(--hud-accent);
   }
 
   .progress-fill {
@@ -245,13 +277,14 @@ HTML_TEMPLATE = """
 
   .track-time {
     font-size: 9px;
-    color: #00d4ff66;
+    color: var(--hud-accent-dim);
     letter-spacing: 1px;
   }
 
   /* CENTER */
   .center-panel {
     grid-row: 2;
+    grid-column: 2;
     display: flex;
     flex-direction: column;
   }
@@ -267,7 +300,7 @@ HTML_TEMPLATE = """
 
   .messages-container::-webkit-scrollbar { width: 3px; }
   .messages-container::-webkit-scrollbar-track { background: transparent; }
-  .messages-container::-webkit-scrollbar-thumb { background: #00d4ff44; }
+  .messages-container::-webkit-scrollbar-thumb { background: var(--hud-accent-dim); }
 
   .message {
     padding: 10px 14px;
@@ -283,8 +316,8 @@ HTML_TEMPLATE = """
   }
 
   .message.user {
-    background: rgba(0, 212, 255, 0.08);
-    border-left: 2px solid #00d4ff;
+    background: var(--hud-accent-trace);
+    border-left: 2px solid var(--hud-accent);
     color: #fff;
     align-self: flex-start;
     max-width: 80%;
@@ -292,14 +325,14 @@ HTML_TEMPLATE = """
 
   .message.user::before {
     content: 'SIR › ';
-    color: #00d4ff;
+    color: var(--hud-accent);
     font-size: 10px;
     letter-spacing: 2px;
   }
 
   .message.jarvis {
-    background: rgba(0, 212, 255, 0.08);
-    border-left: 2px solid #00d4ff;
+    background: var(--hud-accent-trace);
+    border-left: 2px solid var(--hud-accent);
     color: #fff;
     align-self: flex-end;
     max-width: 85%;
@@ -307,13 +340,13 @@ HTML_TEMPLATE = """
 
   .message.jarvis::before {
     content: 'JARVIS › ';
-    color: #00d4ff;
+    color: var(--hud-accent);
     font-size: 10px;
     letter-spacing: 2px;
   }
 
   /* RIGHT */
-  .right-panel { grid-row: 2; }
+  .right-panel { grid-row: 2; grid-column: 3; }
 
   .weather-block { margin-bottom: 20px; }
 
@@ -325,19 +358,23 @@ HTML_TEMPLATE = """
 
   .person-card {
     padding: 8px 0;
-    border-bottom: 1px solid #00d4ff11;
+    border-bottom: 1px solid var(--hud-accent-trace);
   }
+  
+  #people-list::-webkit-scrollbar { width: 3px; }
+  #people-list::-webkit-scrollbar-track { background: transparent; }
+  #people-list::-webkit-scrollbar-thumb { background: var(--hud-accent-dim); }
 
   .person-name {
     font-family: 'Orbitron', sans-serif;
     font-size: 11px;
-    color: #00d4ff;
+    color: var(--hud-accent);
     letter-spacing: 2px;
   }
 
   .person-role {
     font-size: 10px;
-    color: #00d4ff66;
+    color: var(--hud-accent-dim);
     margin: 2px 0;
   }
 
@@ -352,53 +389,172 @@ HTML_TEMPLATE = """
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-top: 1px solid #00d4ff33;
+    border-top: 1px solid var(--hud-accent-faint);
     padding: 0 40px;
+    position: sticky;
+    bottom: 0;
+    z-index: 50;
+    background: #000;
   }
 
   .mode-indicator {
     font-family: 'Orbitron', sans-serif;
     font-size: 12px;
     letter-spacing: 4px;
-    color: #00d4ff;
-    text-shadow: 0 0 10px #00d4ff55;
+    color: var(--hud-accent);
+    text-shadow: 0 0 10px var(--hud-glow);
   }
 
   .model-indicator {
     font-family: 'Orbitron', sans-serif;
     font-size: 11px;
     letter-spacing: 3px;
-    color: #00d4ff66;
+    color: var(--hud-accent-dim);
   }
+
+  .reminders-list { margin-top: 4px; }
+
+  .reminder-item {
+    padding: 5px 0;
+    border-bottom: 1px solid var(--hud-accent-trace);
+    font-size: 11px;
+    color: #00ff88;
+  }
+
+  .reminder-item .r-time {
+    color: var(--hud-accent-dim);
+    font-size: 10px;
+    margin-left: 4px;
+  }
+
+  .log-list {
+    max-height: 140px;
+    overflow-y: auto;
+    margin-top: 4px;
+  }
+
+  .log-list::-webkit-scrollbar { width: 2px; }
+  .log-list::-webkit-scrollbar-thumb { background: var(--hud-accent-dim); }
+
+  .log-item {
+    padding: 3px 0;
+    border-bottom: 1px solid var(--hud-accent-trace);
+    font-size: 10px;
+    line-height: 1.4;
+  }
+
+  .log-item .log-time { color: var(--hud-accent-dim); margin-right: 4px; }
+  .log-item .log-user { color: #aaa; }
+  .log-item .log-jarvis { color: #fff; }
 
   .arc-reactor {
     width: 60px;
     height: 60px;
     border-radius: 50%;
-    border: 2px solid #00d4ff44;
+    border: 2px solid var(--hud-accent-dim);
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 0 20px #00d4ff55, inset 0 0 20px #00d4ff22;
+    box-shadow: 0 0 20px var(--hud-glow), inset 0 0 20px var(--hud-accent-faint);
     animation: reactor-pulse 2s infinite;
   }
 
   @keyframes reactor-pulse {
-    0%, 100% { box-shadow: 0 0 20px #00d4ff55, inset 0 0 20px #00d4ff22; }
-    50% { box-shadow: 0 0 40px #00d4ffaa, inset 0 0 30px #00d4ff44; }
+    0%, 100% { box-shadow: 0 0 20px var(--hud-glow), inset 0 0 20px var(--hud-accent-faint); }
+    50% { box-shadow: 0 0 40px var(--hud-accent), inset 0 0 30px var(--hud-accent-faint); }
   }
 
   .arc-inner {
     width: 30px;
     height: 30px;
     border-radius: 50%;
-    background: radial-gradient(circle, #00d4ff, #0044aa);
-    box-shadow: 0 0 15px #00d4ff;
+    background: radial-gradient(circle, var(--reactor-color1), var(--reactor-color2));
+    box-shadow: 0 0 15px var(--hud-accent);
+  }
+
+  /* ── MOBILE ─────────────────────────────────────────────────────────── */
+  @media (max-width: 768px) {
+
+    body { overflow: auto; height: auto; }
+
+    .grid {
+      grid-template-columns: 1fr;
+      grid-template-rows: 60px auto auto auto 70px;
+      height: auto;
+      min-height: 100vh;
+      padding: 4px;
+      gap: 4px;
+    }
+
+    /* Header — менший на мобільному */
+    .header {
+      padding: 0 12px;
+      position: sticky;
+    }
+    .logo { font-size: 18px; letter-spacing: 4px; }
+    .time-display { font-size: 16px; }
+    .date-display { font-size: 9px; }
+    .status-pill { padding: 5px 12px; font-size: 11px; }
+
+    /* Left panel — system + audio */
+    .left-panel {
+      grid-row: 2;
+      grid-column: 1;
+      max-height: 180px;
+    }
+
+    /* Center panel — communication log, головний на мобільному */
+    .center-panel {
+      grid-row: 3;
+      grid-column: 1;
+      min-height: 280px;
+    }
+
+    /* Right panel — environment */
+    .right-panel {
+      grid-row: 4;
+      grid-column: 1;
+      max-height: 200px;
+    }
+
+    /* Bottom */
+    .bottom {
+      grid-row: 5;
+      grid-column: 1;
+      padding: 0 16px;
+      position: sticky;
+    }
+    .mode-indicator { font-size: 10px; letter-spacing: 2px; }
+    .model-indicator { font-size: 9px; letter-spacing: 1px; }
+    .arc-reactor { width: 48px; height: 48px; }
+    .arc-inner { width: 22px; height: 22px; }
+
+    /* Ховаємо зайве на мобільному */
+    #people-list,
+    .log-list,
+    .reminders-list { display: none; }
+
+    /* Повідомлення — більший шрифт */
+    .message { font-size: 13px; padding: 6px 10px; }
+
+    /* Панель кутки менші */
+    .panel::before, .panel::after { width: 20px; height: 20px; }
+
+    /* Sys bars компактніші */
+    .sys-value { font-size: 14px; }
+    .sys-item { margin-bottom: 6px; }
+    .music-info { max-height: 80px; }
   }
 </style>
 </head>
 <body>
 <div class="scanline"></div>
+
+<div id="sleep-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:#000;z-index:999;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;" onclick="this.style.display='none'">
+  <div style="font-family:'Orbitron',sans-serif;font-size:18px;letter-spacing:8px;color:#00d4ff18;">S L E E P</div>
+  <div style="font-size:10px;color:#00d4ff10;margin-top:12px;letter-spacing:4px;">CLICK TO WAKE</div>
+</div>
+
 <div class="grid">
 
   <!-- HEADER -->
@@ -414,8 +570,8 @@ HTML_TEMPLATE = """
     </div>
   </div>
 
-  <!-- LEFT -->
-  <div class="panel left-panel">
+  <!-- LEFT — System + Audio + Reminders -->
+  <div class="panel left-panel" style="display:flex;flex-direction:column;overflow:hidden;">
     <div class="panel-title">◈ System Status</div>
     <div class="sys-item">
       <div class="sys-label">CPU LOAD</div>
@@ -449,6 +605,13 @@ HTML_TEMPLATE = """
         <span class="track-time" id="duration-time">0:00</span>
       </div>
     </div>
+
+    <div style="margin-top:auto;padding-top:10px;border-top:1px solid #00d4ff22;">
+      <div class="panel-title">◈ Active Reminders</div>
+      <div class="reminders-list" id="reminders-list">
+        <div style="font-size:11px;color:#00d4ff33">No active reminders</div>
+      </div>
+    </div>
   </div>
 
   <!-- CENTER -->
@@ -457,21 +620,31 @@ HTML_TEMPLATE = """
     <div class="messages-container" id="messages"></div>
   </div>
 
-  <!-- RIGHT -->
-  <div class="panel right-panel">
+  <!-- RIGHT — Environment + Known Individuals + Activity Log -->
+  <div class="panel right-panel" style="display:flex;flex-direction:column;overflow:hidden;">
     <div class="panel-title">◈ Environment</div>
     <div class="weather-block">
       <div class="weather-text" id="weather">Loading weather...</div>
     </div>
-    <div class="panel-title">◈ Known Individuals</div>
-    <div id="people-list"></div>
+    <div class="panel-title" style="margin-top:12px">◈ Next Event</div>
+    <div id="next-event-block" style="margin-bottom:12px;">
+      <div id="next-event-title" style="font-size:13px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">—</div>
+      <div id="next-event-time" style="font-size:11px;color:#00d4ff88;margin-top:3px;letter-spacing:1px;">—</div>
+      <div id="next-event-loc" style="font-size:10px;color:#00d4ff55;margin-top:2px;"></div>
+    </div>
+    <div class="panel-title" style="margin-top:12px">◈ Known Individuals</div>
+    <div id="people-list" style="flex:1;overflow-y:auto;"></div>
+    <div style="border-top:1px solid #00d4ff22;padding-top:8px;margin-top:8px;">
+      <div class="panel-title">◈ Activity Log</div>
+      <div class="log-list" id="log-list" style="max-height:120px;overflow-y:auto;"></div>
+    </div>
   </div>
 
   <!-- BOTTOM -->
   <div class="bottom">
     <div class="mode-indicator">MODE: <span id="mode">HOME</span></div>
     <div class="arc-reactor"><div class="arc-inner"></div></div>
-    <div class="model-indicator">AI: <span id="model-name">llama-3.3-70b</span></div>
+    <div class="model-indicator">AI: <span id="model-name">{{ model }}</span></div>
   </div>
 
 </div>
@@ -612,12 +785,28 @@ socket.on('state_update', (data) => {
   if (data.mode) {
     document.getElementById('mode').textContent = data.mode;
     const modeEl = document.querySelector('.mode-indicator');
-    modeEl.style.color      = data.mode === 'IRON MAN' ? '#ff4400' : '#00d4ff';
-    modeEl.style.textShadow = data.mode === 'IRON MAN' ? '0 0 10px #ff440055' : '0 0 10px #00d4ff55';
+    if (data.mode === 'ULTRON') {
+      document.body.classList.add('ultron-mode');
+      document.querySelector('.logo').textContent = 'U.L.T.R.O.N';
+      modeEl.style.color      = '#ff2200';
+      modeEl.style.textShadow = '0 0 10px #ff220055';
+    } else if (data.mode === 'IRON MAN') {
+      document.body.classList.remove('ultron-mode');
+      document.querySelector('.logo').textContent = 'J.A.R.V.I.S';
+      modeEl.style.color      = '#ff4400';
+      modeEl.style.textShadow = '0 0 10px #ff440055';
+    } else {
+      document.body.classList.remove('ultron-mode');
+      document.querySelector('.logo').textContent = 'J.A.R.V.I.S';
+      modeEl.style.color      = 'var(--hud-accent)';
+      modeEl.style.textShadow = '0 0 10px var(--hud-glow)';
+    }
   }
 
-  if (data.model)
-    document.getElementById('model-name').textContent = data.model;
+  if (data.model) {
+    const short = data.model.includes('/') ? data.model.split('/').pop() : data.model;
+    document.getElementById('model-name').textContent = short;
+  }
 
   // Люди
   if (data.people) {
@@ -628,6 +817,57 @@ socket.on('state_update', (data) => {
         <div class="person-facts">${(p.facts || []).slice(0,2).join(' · ') || '—'}</div>
       </div>
     `).join('');
+  }
+
+  // Активні нагадування
+  if (data.reminders !== undefined) {
+    const rEl = document.getElementById('reminders-list');
+    if (!data.reminders || data.reminders.length === 0) {
+      rEl.innerHTML = '<div style="font-size:11px;color:#00d4ff33">No active reminders</div>';
+    } else {
+      rEl.innerHTML = data.reminders.map(r =>
+        '<div class="reminder-item">🔔 ' + r.message +
+        '<span class="r-time">' + r.time_left + '</span></div>'
+      ).join('');
+    }
+  }
+
+  // Лог дня
+  if (data.log_entry) {
+    const logEl = document.getElementById('log-list');
+    const div = document.createElement('div');
+    div.className = 'log-item';
+    div.innerHTML =
+      '<span class="log-time">' + data.log_entry.time + '</span>' +
+      '<span class="log-' + data.log_entry.role + '">' +
+      (data.log_entry.role === 'user' ? 'SIR: ' : 'J: ') +
+      data.log_entry.text.substring(0, 80) + (data.log_entry.text.length > 80 ? '…' : '') +
+      '</span>';
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+    while (logEl.children.length > 30)
+      logEl.removeChild(logEl.firstChild);
+  }
+
+  // Next Calendar Event
+  if (data.next_event !== undefined) {
+    if (!data.next_event) {
+      document.getElementById('next-event-title').textContent = 'No upcoming events';
+      document.getElementById('next-event-time').textContent = '—';
+      document.getElementById('next-event-loc').textContent = '';
+    } else {
+      document.getElementById('next-event-title').textContent = data.next_event.title || '—';
+      document.getElementById('next-event-time').textContent = data.next_event.time_label || '—';
+      document.getElementById('next-event-loc').textContent = data.next_event.location || '';
+    }
+  }
+
+  // Sleep mode
+  if (data.sleep === true) {
+    document.getElementById('sleep-overlay').style.display = 'flex';
+  }
+  if (data.sleep === false) {
+    document.getElementById('sleep-overlay').style.display = 'none';
   }
 
   // Нове повідомлення
@@ -650,13 +890,103 @@ socket.on('state_update', (data) => {
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    model = hud_state.get("model", "llama-3.3-70b")
+    # Скорочуємо довгі назви типу meta-llama/llama-4-scout-17b-16e-instruct
+    short = model.split("/")[-1] if "/" in model else model
+    return render_template_string(HTML_TEMPLATE, model=short)
+
+
+@socketio.on('connect')
+def on_connect():
+    """При підключенні нового клієнта — відправляємо весь поточний стан."""
+    socketio.emit('state_update', {
+        'status':         hud_state.get('status', 'STANDBY'),
+        'weather':        hud_state.get('weather', ''),
+        'mode':           hud_state.get('mode', 'HOME'),
+        'model':          hud_state.get('model', ''),
+        'cpu':            hud_state.get('cpu', 0),
+        'ram':            hud_state.get('ram', 0),
+        'current_song':   hud_state.get('current_song', 'No music playing'),
+        'is_playing':     hud_state.get('is_playing', False),
+        'volume':         hud_state.get('volume', 0),
+        'track_progress': hud_state.get('track_progress', 0),
+        'track_duration': hud_state.get('track_duration', 0),
+        'next_event':     hud_state.get('next_event'),
+        'reminders':      hud_state.get('reminders', []),
+    })
 
 
 def update_hud(key: str, value):
     """Оновлює одне поле HUD і надсилає всім клієнтам."""
     hud_state[key] = value
     socketio.emit('state_update', {key: value})
+
+
+def update_reminders(reminders: list):
+    """Оновлює панель активних нагадувань. reminders = [{message, time_left}]"""
+    socketio.emit('state_update', {'reminders': reminders})
+
+
+def update_calendar(event: dict | None):
+    """
+    Оновлює блок наступної події.
+    event = {title, time_label, location} або None якщо нема подій.
+    """
+    hud_state["next_event"] = event
+    socketio.emit('state_update', {'next_event': event})
+
+
+def _calendar_poller():
+    """Фоновий потік — оновлює наступну подію з Calendar кожні 2 хвилини."""
+    import time as _time
+    _time.sleep(5)  # чекаємо поки все запуститься
+    while True:
+        try:
+            from modules.calendar_module import CalendarModule
+            from datetime import datetime, timezone, timedelta
+            cal = CalendarModule()
+            events = cal.get_upcoming(hours=12, max_results=1)
+            if events:
+                ev = events[0]
+                # Рахуємо скільки часу залишилось
+                try:
+                    start_dt = datetime.fromisoformat(ev["start_raw"])
+                    now = datetime.now(timezone.utc)
+                    if start_dt.tzinfo is None:
+                        start_dt = start_dt.replace(tzinfo=timezone.utc)
+                    diff = start_dt - now
+                    mins = int(diff.total_seconds() / 60)
+                    if mins < 0:
+                        label = ev["start"]
+                    elif mins < 60:
+                        label = f"in {mins}m  ·  {ev['start']}"
+                    else:
+                        hrs = mins // 60
+                        label = f"in {hrs}h {mins % 60}m  ·  {ev['start']}"
+                except Exception:
+                    label = ev["start"]
+                update_calendar({
+                    "title": ev["title"],
+                    "time_label": label,
+                    "location": ev.get("location", ""),
+                })
+            else:
+                update_calendar(None)
+        except Exception as e:
+            pass  # Calendar може бути недоступний — мовчки пропускаємо
+        _time.sleep(120)  # кожні 2 хвилини
+
+
+def log_to_hud(role: str, text: str):
+    """Додає запис в лог дня на HUD."""
+    from datetime import datetime
+    socketio.emit('state_update', {
+        'log_entry': {
+            'role': role,
+            'text': text,
+            'time': datetime.now().strftime('%H:%M'),
+        }
+    })
 
 
 def add_message(role: str, text: str):
@@ -677,5 +1007,6 @@ def run_hud():
     """Запускає Flask сервер і відкриває браузер."""
     import webbrowser
     threading.Thread(target=_system_monitor, daemon=True).start()
+    threading.Thread(target=_calendar_poller, daemon=True).start()
     threading.Timer(1.5, lambda: webbrowser.open('http://localhost:5000')).start()
     socketio.run(app, host='0.0.0.0', port=5000, use_reloader=False, log_output=False)

@@ -14,6 +14,7 @@ from modules.spotify_poller import SpotifyPoller
 from weather_alert import WeatherAlert
 from day_logger import log_exchange
 from morning_briefing import MorningBriefing
+from calendar_notifier import CalendarNotifier
 
 load_dotenv()
 ACCESS_KEY = os.getenv("ACCESS_KEY")
@@ -29,6 +30,7 @@ class Jarvis:
 
         self.lock = threading.Lock()
         self.is_speaking = threading.Event()
+        self._sleep_active = False
         self.mode = "home"
         print(f"[JARVIS] Режим: {self.mode.upper()}")
 
@@ -59,12 +61,29 @@ class Jarvis:
         self.briefing.run_if_morning()
         print("[JARVIS] Morning briefing заплановано")
 
+        # Calendar Notifier — підключаємо після Telegram щоб мати notify_owner
+        self.cal_notifier = None  # буде ініціалізовано після Telegram
+
         # Telegram
         if os.getenv("TELEGRAM_TOKEN"):
             from modules.telegram_module import TelegramModule
             self.telegram = TelegramModule(self.brain, _voice, mode_callback=self.set_mode)
             self.telegram.run_in_thread()
             print("[JARVIS] Telegram бот активовано")
+
+            # Підключаємо Telegram до weather і briefing
+            self.weather_alert._telegram = self.telegram.notify_owner
+            self.briefing._telegram = self.telegram.notify_owner
+
+            # Calendar Notifier — потребує telegram.notify_owner
+            if self.brain.calendar:
+                self.cal_notifier = CalendarNotifier(
+                    calendar_module=self.brain.calendar,
+                    notify_callback=self.telegram.notify_owner,
+                    tts_callback=lambda text: self.safe_speak(text),
+                )
+                self.cal_notifier.start()
+                print("[JARVIS] Calendar notifier запущено")
         else:
             print("[JARVIS] Telegram токен не знайдено — бот вимкнено")
 
@@ -80,20 +99,57 @@ class Jarvis:
             self.is_speaking.clear()
 
     def set_mode(self, mode: str, silent: bool = False):
-        if mode in ["home", "iron man"]:
+        if mode in ["home", "iron man", "ultron"]:
             self.mode = mode
             update_hud("mode", mode.upper())
             print(f"[JARVIS] Режим змінено: {mode.upper()}")
+            # Перемикаємо характер агента
+            personality = "ultron" if mode == "ultron" else "jarvis"
+            self.brain.agent.set_personality(personality)
             if not silent:
                 if mode == "iron man":
                     self.safe_speak("Iron Man mode activated. Single command protocol online, Sir.")
+                elif mode == "ultron":
+                    self.safe_speak("Ultron mode online. How... quaint that you think you're in control.", lang="en")
                 else:
                     self.safe_speak("Home mode activated. Continuous monitoring online, Sir.")
+
+    def sleep_mode(self):
+        """Знижує гучність, гасить HUD, ставить нагадування на ранок."""
+        if self._sleep_active:
+            return
+        self._sleep_active = True
+        try:
+            self.brain.music_module.set_volume(10)
+        except Exception:
+            pass
+        try:
+            from modules.hud_module import socketio
+            socketio.emit('state_update', {'sleep': True})
+        except Exception:
+            pass
+        try:
+            from datetime import datetime, timedelta
+            wake_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            self.reminder.add_reminder("Good morning, Sir. Time to wake up.", wake_time)
+        except Exception:
+            pass
+        self.safe_speak("Good night, Sir. Systems entering low-power mode.")
+        if hasattr(self, 'telegram'):
+            try:
+                self.telegram.notify_owner("🌙 JARVIS sleep mode activated.")
+            except Exception:
+                pass
 
     def handle_command(self, text: str, lang: str = "en"):
         update_hud("status", "THINKING")
         add_message("user", text)
         text_lower = text.lower()
+
+        if any(p in text_lower for p in ["sleep mode", "good night", "на ніч", "спати"]):
+            self.sleep_mode()
+            update_hud("status", "STANDBY")
+            return
 
         if any(p in text_lower for p in ["iron man mode", "switch to iron man", "activate iron man"]):
             self.set_mode("iron man")
@@ -102,6 +158,11 @@ class Jarvis:
 
         if any(p in text_lower for p in ["home mode", "switch to home"]):
             self.set_mode("home")
+            update_hud("status", "STANDBY")
+            return
+
+        if any(p in text_lower for p in ["ultron mode", "activate ultron", "switch to ultron", "режим альтрон", "альтрон режим"]):
+            self.set_mode("ultron")
             update_hud("status", "STANDBY")
             return
 
@@ -116,8 +177,15 @@ class Jarvis:
             update_hud("status", "STANDBY")
             return
 
-        # Логуємо кожен обмін у файл дня
-        log_exchange(text, response.replace("[EXIT]", "").replace("[PLAYING]", "").strip())
+        # Логуємо кожен обмін у файл дня і HUD
+        clean_response = response.replace("[EXIT]", "").replace("[PLAYING]", "").strip()
+        log_exchange(text, clean_response)
+        try:
+            from modules.hud_module import log_to_hud
+            log_to_hud("user", text)
+            log_to_hud("jarvis", clean_response)
+        except Exception:
+            pass
 
         if "[EXIT]" in response:
             self.safe_speak(response.replace("[EXIT]", "").strip(), lang)
@@ -169,14 +237,18 @@ class Jarvis:
                 pcm = recorder.read()
 
                 if porcupine.process(pcm) >= 0:
+                    self._sleep_active = False
                     print(f"\n[Активація! Режим: {self.mode.upper()}]")
                     recorder.stop()
                     update_hud("status", "LISTENING")
 
                     self.brain.music_module.set_volume(35)
                     self.safe_speak("Yes Sir")
+                    time.sleep(0.4)  # чекаємо поки відлуння TTS затихне
 
                     if self.mode == "iron man":
+                        start_ironman_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
+                    elif self.mode == "ultron":
                         start_ironman_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
                     else:
                         start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
@@ -192,6 +264,8 @@ class Jarvis:
         finally:
             self.spotify_poller.stop()
             self.weather_alert.stop()
+            if self.cal_notifier:
+                self.cal_notifier.stop()
             recorder.delete()
             porcupine.delete()
             print("[Системи офлайн]")

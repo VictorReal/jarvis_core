@@ -70,10 +70,17 @@ class TelegramModule:
                 self._set_mode_silent("iron man")
             elif any(p in lower for p in ["home mode", "switch to home"]):
                 self._set_mode_silent("home")
+            elif any(p in lower for p in ["ultron mode", "activate ultron", "switch to ultron", "режим альтрон"]):
+                self._set_mode_silent("ultron")
             elif "switch" in lower:  # просто "switch" — toggle
                 from modules.hud_module import hud_state
                 current = hud_state.get("mode", "HOME").lower()
                 self._set_mode_silent("iron man" if current == "home" else "home")
+
+        # Скріншот HUD
+        if any(p in lower for p in ["screenshot", "hud screenshot", "/hud", "покажи hud", "покажи хад"]):
+            await self._send_hud_screenshot(update)
+            return
 
         response = self.brain.process(user_text, lang=lang)
 
@@ -150,6 +157,59 @@ class TelegramModule:
             loop.close()
 
         threading.Thread(target=_run, daemon=True).start()
+
+    async def _send_hud_screenshot(self, update: Update):
+        """Робить скріншот HUD (localhost:5000) і надсилає як фото."""
+        import time
+        filename = f"hud_{int(time.time() * 1000)}.png"
+        try:
+            # Використовуємо selenium або playwright якщо є, інакше pyautogui
+            captured = False
+
+            # Спроба 1: selenium (headless Chrome)
+            try:
+                from selenium import webdriver
+                from selenium.webdriver.chrome.options import Options
+                opts = Options()
+                opts.add_argument("--headless")
+                opts.add_argument("--window-size=1280,720")
+                opts.add_argument("--no-sandbox")
+                opts.add_argument("--disable-gpu")
+                driver = webdriver.Chrome(options=opts)
+                driver.get("http://localhost:5000")
+                import asyncio as _asyncio
+                await _asyncio.sleep(1.5)  # чекаємо рендер
+                driver.save_screenshot(filename)
+                driver.quit()
+                captured = True
+            except Exception:
+                pass
+
+            # Спроба 2: pyautogui (скріншот всього екрана — якщо HUD відкритий)
+            if not captured:
+                try:
+                    import pyautogui
+                    shot = pyautogui.screenshot()
+                    shot.save(filename)
+                    captured = True
+                except Exception:
+                    pass
+
+            if captured and os.path.exists(filename):
+                with open(filename, "rb") as img:
+                    await update.message.reply_photo(photo=img, caption="HUD snapshot, Sir.")
+            else:
+                await update.message.reply_text("Sir, screenshot capture failed. Make sure HUD is running.")
+
+        except Exception as e:
+            logger.error(f"[TELEGRAM HUD SCREENSHOT] {e}")
+            await update.message.reply_text(f"Screenshot error: {e}")
+        finally:
+            if os.path.exists(filename):
+                try:
+                    os.remove(filename)
+                except Exception:
+                    pass
 
     def run_in_thread(self):
         """Запускає Telegram бота в окремому потоці."""

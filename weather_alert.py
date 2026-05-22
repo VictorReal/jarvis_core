@@ -23,13 +23,10 @@ CHECK_INTERVAL_MIN = 30
 
 
 class WeatherAlert:
-    def __init__(self, nav_module, tts_callback=None):
-        """
-        nav_module    — NavigationModule (для координат)
-        tts_callback  — функція speak(text), якщо None — тільки print
-        """
+    def __init__(self, nav_module, tts_callback=None, telegram_callback=None):
         self._nav = nav_module
         self._speak = tts_callback or (lambda t: print(f"[WEATHER ALERT] {t}"))
+        self._telegram = telegram_callback
         self._running = False
         self._thread = None
         self._last_condition = None   # остання відома погода (рядок)
@@ -106,6 +103,11 @@ class WeatherAlert:
             )
             logger.info(f"[WEATHER ALERT] {alert}")
             self._speak(alert)
+            if self._telegram:
+                try:
+                    self._telegram(f"⚠️ Weather alert: {condition_word} detected.\n{new.replace('|', ' · ')}")
+                except Exception:
+                    pass
 
         self._last_condition = new
 

@@ -13,3 +13,4 @@ access-points
 spotipy
 langdetect
 flask flask-socketio
+librosa
