@@ -132,7 +132,7 @@ def update_short_memory(llm):
         try:
             from day_logger import get_today_log
         except ImportError:
-            from brain.day_logger import get_today_log
+            from day_logger import get_today_log
         log = get_today_log()
         if not log or len(log) < 100:
             return
@@ -152,6 +152,12 @@ def update_short_memory(llm):
         raw = resp.content.strip()
         # Чистимо markdown якщо є
         raw = raw.replace("```json", "").replace("```", "").strip()
+        # Знаходимо JSON масив навіть якщо є зайвий текст навколо
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start < 0 or end <= start:
+            return
+        raw = raw[start:end]
         facts = json.loads(raw)
         if not isinstance(facts, list):
             return
@@ -281,12 +287,28 @@ def extract_and_save_people(user_input: str, jarvis_response: str, llm):
                 return
 
             from modules.people_module import get_profile, create_profile, add_fact
+
+            STOP_NAMES = {
+                "sir", "victor", "вікторе", "вiкторе", "jarvis", "ultron",
+                "ai", "system", "user", "assistant", "you", "i",
+                "home", "iron", "man", "сер", "пан",
+            }
+
+            def _normalize_name(n: str) -> str:
+                """Прибирає кличний відмінок -е/-є якщо це українське ім'я."""
+                if len(n) > 3 and n[-1].lower() in ("е", "є"):
+                    return n[:-1]  # Вікторе → Віктор
+                return n
+
             for item in items:
                 name = item.get("name", "").strip()
                 relationship = item.get("relationship", "acquaintance")
                 fact = item.get("fact", "").strip()
-                if not name or not fact or len(name) > 50:
+                if not name or not fact or len(name) > 50 or len(name) < 2:
                     continue
+                if name.lower() in STOP_NAMES:
+                    continue
+                name = _normalize_name(name)
 
                 profile = get_profile(name)
                 if not profile:

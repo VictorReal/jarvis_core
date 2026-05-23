@@ -217,9 +217,11 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
 
     @tool
     def recall_person(name: str) -> str:
-        """Recall everything Jarvis knows about a person from the local database. ALWAYS call this tool when user asks what you know about someone or asks about a specific person."""
+        """Recall everything Jarvis knows about a person. Call when user asks about a specific person by name. Parameter 'name' must be a plain string like 'John' or 'Anna'."""
         from modules.people_module import find_profile_by_name
-        result = find_profile_by_name(name)
+        if not isinstance(name, str):
+            name = str(name)
+        result = find_profile_by_name(name.strip())
         if not result:
             return f"I don't have any information about {name} yet, Sir."
         if isinstance(result, dict) and result.get("multiple"):
@@ -232,11 +234,14 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
 
     @tool
     def introduce_person(name: str, relationship: str, personality: str = "polite") -> str:
-        """Create a profile for a new person. Use ONLY when user explicitly states their name."""
+        """Create a profile for a new person. Use ONLY when user explicitly states someone's name. All parameters must be plain strings."""
         from modules.people_module import create_profile, find_profile_by_name
+        if not isinstance(name, str):
+            name = str(name)
+        name = name.strip()
         existing = find_profile_by_name(name)
         if existing and not isinstance(existing, dict):
-            return f"Sir, I already know someone named {name}. Is this the same person?"
+            return f"Sir, I already know someone named {name}."
         create_profile(name, relationship, personality)
         return f"Pleasure to meet you, {name}. I'll remember you as {relationship} of Sir's."
 
@@ -547,10 +552,10 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
 class JarvisAgent:
     def __init__(self, music_module, nav_module, sensors_module, reminder_module=None):
         self.models = [
-            "meta-llama/llama-4-scout-17b-16e-instruct",
-            "llama-3.1-8b-instant",
-            "gemma2-9b-it",
-            "gemini",   # резервна — Google Gemini
+            "meta-llama/llama-4-scout-17b-16e-instruct",  # основна
+            "llama-3.3-70b-versatile",                    # fallback 1
+            "llama-3.1-8b-instant",                       # fallback 2
+            "gemini",                                     # fallback 3 — Google резерв
         ]
         self.current_model_index = 0
 
@@ -563,7 +568,14 @@ class JarvisAgent:
         self.tools_map = {t.name: t for t in self.tools}
         self.llm_with_tools = self.llm.bind_tools(self.tools)
         self.chat_history = load_history()
-        self.active_mode = "jarvis"  # "jarvis" або "ultron"
+        self.active_mode = "jarvis"
+
+        # Оновлюємо HUD з реальною поточною моделлю
+        try:
+            from modules.hud_module import update_hud
+            update_hud("model", self.models[0].split("/")[-1])
+        except Exception:
+            pass
 
         # Запускаємо фонове оновлення short/long memory
         schedule_memory_updates(self.llm)
@@ -578,13 +590,13 @@ class JarvisAgent:
             import os
             if _GEMINI_AVAILABLE and os.getenv("GOOGLE_API_KEY"):
                 return ChatGoogleGenerativeAI(
-                    model="gemini-1.5-flash",
+                    model="gemini-2.0-flash",
                     temperature=0.5,
-                    max_output_tokens=max_tokens * 4,  # Gemini рахує інакше
+                    max_output_tokens=max_tokens * 4,
                     google_api_key=os.getenv("GOOGLE_API_KEY"),
                 )
-            # Якщо Gemini недоступний — повертаємось на першу Groq модель
-            return ChatGroq(model=self.models[0], temperature=0.5, max_tokens=max_tokens)
+            # Якщо Gemini недоступний — повертаємось на llama-3.1-8b
+            return ChatGroq(model="llama-3.1-8b-instant", temperature=0.5, max_tokens=max_tokens)
         return ChatGroq(model=model, temperature=0.5, max_tokens=max_tokens)
 
     def _switch_to_next_model(self):
@@ -608,10 +620,8 @@ class JarvisAgent:
     def ask(self, user_input: str, lang: str = "en") -> str:
         base_prompt = ULTRON_PROMPT if self.active_mode == "ultron" else SYSTEM_PROMPT
         lang_instruction = (
-            "Respond in Ukrainian language only. Address user as 'Вікторе'."
-            if (lang == "uk" and self.active_mode == "ultron")
-            else "Respond in Ukrainian language only. Address user as 'Сер'."
-            if lang == "uk"
+            "Respond in Ukrainian language only. Address user as 'Сер'."
+            if lang == "uk" and self.active_mode != "ultron"
             else "Respond in English language only. Address user as 'Victor'."
             if self.active_mode == "ultron"
             else "Respond in English language only. Address user as 'Sir'."

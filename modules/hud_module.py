@@ -130,6 +130,8 @@ HTML_TEMPLATE = """
     font-weight: 700;
     letter-spacing: 3px;
     transition: all 0.3s;
+    min-width: 160px;
+    justify-content: center;
   }
 
   .status-dot {
@@ -345,6 +347,21 @@ HTML_TEMPLATE = """
     letter-spacing: 2px;
   }
 
+  .message.ultron {
+    background: rgba(255,34,0,0.06);
+    border-left: 2px solid #ff2200;
+    color: #fff;
+    align-self: flex-end;
+    max-width: 85%;
+  }
+
+  .message.ultron::before {
+    content: 'ULTRON › ';
+    color: #ff2200;
+    font-size: 10px;
+    letter-spacing: 2px;
+  }
+
   /* RIGHT */
   .right-panel { grid-row: 2; grid-column: 3; }
 
@@ -386,11 +403,11 @@ HTML_TEMPLATE = """
   /* BOTTOM */
   .bottom {
     grid-column: 1 / -1;
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
     border-top: 1px solid var(--hud-accent-faint);
-    padding: 0 40px;
+    padding: 0 20px;
     position: sticky;
     bottom: 0;
     z-index: 50;
@@ -403,6 +420,8 @@ HTML_TEMPLATE = """
     letter-spacing: 4px;
     color: var(--hud-accent);
     text-shadow: 0 0 10px var(--hud-glow);
+    justify-self: start;
+    white-space: nowrap;
   }
 
   .model-indicator {
@@ -410,6 +429,11 @@ HTML_TEMPLATE = """
     font-size: 11px;
     letter-spacing: 3px;
     color: var(--hud-accent-dim);
+    justify-self: end;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
 
   .reminders-list { margin-top: 4px; }
@@ -491,10 +515,10 @@ HTML_TEMPLATE = """
       padding: 0 12px;
       position: sticky;
     }
-    .logo { font-size: 18px; letter-spacing: 4px; }
+    .logo { font-size: 16px; letter-spacing: 3px; }
     .time-display { font-size: 16px; }
     .date-display { font-size: 9px; }
-    .status-pill { padding: 5px 12px; font-size: 11px; }
+    .status-pill { padding: 5px 8px; font-size: 9px; letter-spacing: 2px; min-width: unset; }
 
     /* Left panel — system + audio */
     .left-panel {
@@ -521,11 +545,11 @@ HTML_TEMPLATE = """
     .bottom {
       grid-row: 5;
       grid-column: 1;
-      padding: 0 16px;
+      padding: 0 12px;
       position: sticky;
     }
-    .mode-indicator { font-size: 10px; letter-spacing: 2px; }
-    .model-indicator { font-size: 9px; letter-spacing: 1px; }
+    .mode-indicator { font-size: 9px; letter-spacing: 2px; }
+    .model-indicator { font-size: 8px; letter-spacing: 1px; max-width: 120px; }
     .arc-reactor { width: 48px; height: 48px; }
     .arc-inner { width: 22px; height: 22px; }
 
@@ -555,11 +579,38 @@ HTML_TEMPLATE = """
   <div style="font-size:10px;color:#00d4ff10;margin-top:12px;letter-spacing:4px;">CLICK TO WAKE</div>
 </div>
 
+<!-- INPUT OVERLAY — відкривається по кліку на кульку -->
+<div id="input-overlay" style="
+  display:none; position:fixed; bottom:90px; left:50%; transform:translateX(-50%);
+  width:min(600px,90vw); z-index:200;
+  background:rgba(0,10,20,0.95); border:1px solid var(--hud-accent-dim);
+  border-radius:4px; padding:12px 16px;
+  box-shadow:0 0 30px var(--hud-glow);
+">
+  <div style="font-family:'Orbitron',sans-serif;font-size:9px;letter-spacing:3px;color:var(--hud-accent-dim);margin-bottom:8px;">DIRECT INPUT</div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <input id="hud-input" type="text" autocomplete="off" spellcheck="false"
+      placeholder="Enter command, Sir..."
+      style="
+        flex:1; background:transparent; border:none; border-bottom:1px solid var(--hud-accent-dim);
+        color:#fff; font-family:'Share Tech Mono',monospace; font-size:14px;
+        padding:6px 0; outline:none; letter-spacing:1px;
+      "
+    />
+    <button onclick="sendHudInput()" style="
+      background:transparent; border:1px solid var(--hud-accent-dim);
+      color:var(--hud-accent); font-family:'Orbitron',sans-serif;
+      font-size:10px; letter-spacing:2px; padding:6px 12px;
+      cursor:pointer; border-radius:2px;
+    ">SEND</button>
+  </div>
+</div>
+
 <div class="grid">
 
   <!-- HEADER -->
   <div class="header">
-    <div class="logo">J.A.R.V.I.S</div>
+    <div class="logo">J.A.R.V.I.S.</div>
     <div class="status-pill" id="status-pill">
       <div class="status-dot" id="status-dot"></div>
       <span id="status-text">STANDBY</span>
@@ -643,7 +694,7 @@ HTML_TEMPLATE = """
   <!-- BOTTOM -->
   <div class="bottom">
     <div class="mode-indicator">MODE: <span id="mode">HOME</span></div>
-    <div class="arc-reactor"><div class="arc-inner"></div></div>
+    <div class="arc-reactor" id="reactor-btn" onclick="toggleInput()" style="cursor:pointer;" title="Click to type"><div class="arc-inner"></div></div>
     <div class="model-indicator">AI: <span id="model-name">{{ model }}</span></div>
   </div>
 
@@ -787,17 +838,17 @@ socket.on('state_update', (data) => {
     const modeEl = document.querySelector('.mode-indicator');
     if (data.mode === 'ULTRON') {
       document.body.classList.add('ultron-mode');
-      document.querySelector('.logo').textContent = 'U.L.T.R.O.N';
+      document.querySelector('.logo').textContent = 'U.L.T.R.O.N. ';
       modeEl.style.color      = '#ff2200';
       modeEl.style.textShadow = '0 0 10px #ff220055';
     } else if (data.mode === 'IRON MAN') {
       document.body.classList.remove('ultron-mode');
-      document.querySelector('.logo').textContent = 'J.A.R.V.I.S';
+      document.querySelector('.logo').textContent = 'J.A.R.V.I.S. ';
       modeEl.style.color      = '#ff4400';
       modeEl.style.textShadow = '0 0 10px #ff440055';
     } else {
       document.body.classList.remove('ultron-mode');
-      document.querySelector('.logo').textContent = 'J.A.R.V.I.S';
+      document.querySelector('.logo').textContent = 'J.A.R.V.I.S. ';
       modeEl.style.color      = 'var(--hud-accent)';
       modeEl.style.textShadow = '0 0 10px var(--hud-glow)';
     }
@@ -882,6 +933,33 @@ socket.on('state_update', (data) => {
       container.removeChild(container.firstChild);
   }
 });
+
+// ── HUD Input (клік на кульку) ────────────────────────────────────────────
+function toggleInput() {
+  const overlay = document.getElementById('input-overlay');
+  const visible = overlay.style.display === 'flex';
+  overlay.style.display = visible ? 'none' : 'flex';
+  if (!visible) {
+    setTimeout(() => document.getElementById('hud-input').focus(), 50);
+  }
+}
+
+function sendHudInput() {
+  const input = document.getElementById('hud-input');
+  const text = input.value.trim();
+  if (!text) return;
+  socket.emit('hud_command', { text });
+  input.value = '';
+  input.focus();
+}
+
+document.addEventListener('keydown', (e) => {
+  const overlay = document.getElementById('input-overlay');
+  if (overlay.style.display === 'flex') {
+    if (e.key === 'Enter') sendHudInput();
+    if (e.key === 'Escape') overlay.style.display = 'none';
+  }
+});
 </script>
 </body>
 </html>
@@ -914,6 +992,24 @@ def on_connect():
         'next_event':     hud_state.get('next_event'),
         'reminders':      hud_state.get('reminders', []),
     })
+
+
+
+# Callback який main.py підключає для обробки команд з HUD input
+_hud_command_callback = None
+
+def set_hud_command_callback(fn):
+    global _hud_command_callback
+    _hud_command_callback = fn
+
+@socketio.on('hud_command')
+def on_hud_command(data):
+    """Отримує текстову команду з браузера (клік на кульку)."""
+    text = data.get('text', '').strip()
+    if not text or not _hud_command_callback:
+        return
+    import threading
+    threading.Thread(target=_hud_command_callback, args=(text,), daemon=True).start()
 
 
 def update_hud(key: str, value):

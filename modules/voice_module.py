@@ -10,17 +10,29 @@ class VoiceModule:
     VOICES = {
         "en": "en-GB-RyanNeural",
         "uk": "uk-UA-OstapNeural",
+        "ultron": "en-US-ChristopherNeural",  # низький, жорсткий — Альтрон
     }
 
     def __init__(self):
         self.current_voice = self.VOICES["en"]
+        self.personality = "jarvis"  # "jarvis" або "ultron"
+
+    def set_personality(self, mode: str):
+        """Перемикає голосову особистість."""
+        self.personality = mode.lower()
+        print(f"[VOICE] Особистість: {self.personality.upper()}")
 
     def speak(self, text: str, lang: str = "en"):
         clean_text = text.replace("*", "").replace("#", "").strip()
         if not clean_text:
             return
 
-        self.current_voice = self.VOICES.get(lang, self.VOICES["en"])
+        if self.personality == "ultron":
+            self.current_voice = self.VOICES["ultron"]
+        else:
+            self.current_voice = self.VOICES.get(lang, self.VOICES["en"])
+
+        print(f"[VOICE] personality={self.personality} lang={lang} voice={self.current_voice}")
 
         try:
             asyncio.run(self._generate_and_play(clean_text))
@@ -73,3 +85,7 @@ _voice = VoiceModule()
 
 def speak(text: str, lang: str = "en"):
     _voice.speak(text, lang)
+
+def set_voice_personality(mode: str):
+    """Перемикає голос — викликається з main.py при зміні режиму."""
+    _voice.set_personality(mode)

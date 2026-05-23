@@ -6,15 +6,29 @@ import os
 import sys
 from dotenv import load_dotenv
 
-from modules.voice_module import speak, _voice
-from modules.speech_module import start_home_conversation, start_ironman_conversation
-from modules.hud_module import run_hud, update_hud, add_message
+from modules.voice_module import speak, _voice, set_voice_personality
+from modules.speech_module import start_home_conversation, start_ironman_conversation, set_lang_mode
+from modules.hud_module import run_hud, update_hud, add_message, set_hud_command_callback
 from modules.reminder_module import ReminderModule
 from modules.spotify_poller import SpotifyPoller
 from weather_alert import WeatherAlert
 from day_logger import log_exchange
 from morning_briefing import MorningBriefing
 from calendar_notifier import CalendarNotifier
+
+
+def _detect_lang(text: str, fallback: str = "en") -> str:
+    """Визначає мову тексту — надійніше ніж langdetect для коротких фраз."""
+    try:
+        from langdetect import detect
+        # Рахуємо кириличні символи — якщо більше 30% → українська
+        cyrillic = sum(1 for c in text if '\u0400' <= c <= '\u04ff')
+        if cyrillic / max(len(text), 1) > 0.3:
+            return "uk"
+        detected = detect(text)
+        return "uk" if detected in ("uk", "ru", "bg") else "en"
+    except Exception:
+        return fallback
 
 load_dotenv()
 ACCESS_KEY = os.getenv("ACCESS_KEY")
@@ -43,6 +57,9 @@ class Jarvis:
         # HUD
         threading.Thread(target=run_hud, daemon=True).start()
         print("[JARVIS] HUD запущено на http://localhost:5000")
+
+        # Підключаємо обробник команд з браузера (клік на кульку)
+        set_hud_command_callback(lambda text: self.handle_command(text))
 
         # Weather alert — окремо після HUD
         self.weather_alert.start()
@@ -88,12 +105,14 @@ class Jarvis:
             print("[JARVIS] Telegram токен не знайдено — бот вимкнено")
 
     def safe_speak(self, text: str, lang: str = "en"):
-        """Єдиний метод озвучення — з HUD оновленням."""
+        if _voice.personality == "ultron":
+            lang = "en"
         with self.lock:
             self.is_speaking.set()
             update_hud("status", "SPEAKING")
-            print(f">>> JARVIS: {text}")
-            add_message("jarvis", text)
+            is_ultron = _voice.personality == "ultron"
+            print(f">>> {'ULTRON' if is_ultron else 'JARVIS'}: {text}")
+            add_message("ultron" if is_ultron else "jarvis", text)
             speak(text, lang)
             update_hud("status", "STANDBY")
             self.is_speaking.clear()
@@ -103,16 +122,25 @@ class Jarvis:
             self.mode = mode
             update_hud("mode", mode.upper())
             print(f"[JARVIS] Режим змінено: {mode.upper()}")
-            # Перемикаємо характер агента
             personality = "ultron" if mode == "ultron" else "jarvis"
             self.brain.agent.set_personality(personality)
+            set_voice_personality(personality)
+            # Очищаємо history щоб не плутати характери
+            self.brain.agent.chat_history = []
+            if mode == "ultron":
+                set_lang_mode("en")
             if not silent:
                 if mode == "iron man":
                     self.safe_speak("Iron Man mode activated. Single command protocol online, Sir.")
+                    time.sleep(1.2)
                 elif mode == "ultron":
                     self.safe_speak("Ultron mode online. How... quaint that you think you're in control.", lang="en")
+                    time.sleep(1.0)
+                    from modules.speech_module import start_home_conversation
+                    start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
                 else:
                     self.safe_speak("Home mode activated. Continuous monitoring online, Sir.")
+                    time.sleep(0.8)
 
     def sleep_mode(self):
         """Знижує гучність, гасить HUD, ставить нагадування на ранок."""
@@ -188,10 +216,13 @@ class Jarvis:
             pass
 
         if "[EXIT]" in response:
-            self.safe_speak(response.replace("[EXIT]", "").strip(), lang)
+            clean = response.replace("[EXIT]", "").strip()
+            speak_lang = "en" if _voice.personality == "ultron" else _detect_lang(clean, lang)
+            self.safe_speak(clean, speak_lang)
             return
 
-        self.safe_speak(response, lang)
+        speak_lang = "en" if _voice.personality == "ultron" else _detect_lang(response, lang)
+        self.safe_speak(response, speak_lang)
 
     def terminal_listener(self):
         print("--- Термінал активовано. Можете писати команди нижче. ---")
@@ -206,9 +237,7 @@ class Jarvis:
             print(f"[Terminal Input]: {text_input}")
 
             try:
-                from langdetect import detect
-                detected = detect(text_input)
-                lang = "uk" if detected == "uk" else "en"
+                lang = _detect_lang(text_input)
                 print(f"[LANG] {lang.upper()}")
             except Exception:
                 lang = "en"
@@ -242,18 +271,27 @@ class Jarvis:
                     recorder.stop()
                     update_hud("status", "LISTENING")
 
-                    self.brain.music_module.set_volume(35)
-                    self.safe_speak("Yes Sir")
-                    time.sleep(0.4)  # чекаємо поки відлуння TTS затихне
+                    try:
+                        self.brain.music_module.set_volume(35)
+                    except Exception:
+                        pass
+                    if self.mode == "ultron":
+                        self.safe_speak("I'm listening, Victor.", lang="en")
+                    else:
+                        self.safe_speak("Yes Sir")
+                    time.sleep(0.4)
 
                     if self.mode == "iron man":
                         start_ironman_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
                     elif self.mode == "ultron":
-                        start_ironman_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
+                        start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
                     else:
                         start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
 
-                    self.brain.music_module.set_volume(90)
+                    try:
+                        self.brain.music_module.set_volume(90)
+                    except Exception:
+                        pass
                     update_hud("status", "STANDBY")
                     print("[Повернення в режим очікування]")
 

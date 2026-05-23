@@ -10,6 +10,14 @@ import time
 
 recognizer = sr.Recognizer()
 
+# Мовний режим STT — "en" за замовчуванням, "uk" тільки по команді
+_lang_mode = "en"
+
+def set_lang_mode(lang: str):
+    global _lang_mode
+    _lang_mode = lang
+    print(f"[SPEECH] Мовний режим: {lang.upper()}")
+
 class SpeechListener:
     def __init__(self):
         self.fs = 16000
@@ -27,7 +35,7 @@ class SpeechListener:
     def listen(self) -> tuple[str | None, str]:
         """Повертає (текст, мова) — 'en' або 'uk'."""
         self._recording_data = []
-        time.sleep(0.1)
+        time.sleep(0.3)  # пауза щоб відлуння TTS затихло
         print("[LISTENING...]")
 
         try:
@@ -77,12 +85,11 @@ class SpeechListener:
                 with sr.AudioFile(filename) as source:
                     audio = recognizer.record(source)
                     try:
-                        # Один запит en-US + langdetect для мови
-                        user_text = recognizer.recognize_google(audio, language="en-US")
-                        try:
-                            detected = detect(user_text)
-                            lang = "uk" if detected == "uk" else "en"
-                        except LangDetectException:
+                        if _lang_mode == "uk":
+                            user_text = recognizer.recognize_google(audio, language="uk-UA")
+                            lang = "uk"
+                        else:
+                            user_text = recognizer.recognize_google(audio, language="en-US")
                             lang = "en"
 
                         print(f">>> YOU ({lang.upper()}): {user_text}")
@@ -93,7 +100,7 @@ class SpeechListener:
                         return user_text, lang
 
                     except sr.UnknownValueError:
-                        return None, "en"
+                        return None, _lang_mode
 
             finally:
                 if os.path.exists(filename):
@@ -147,27 +154,18 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
 
         lower = user_text.lower()
 
-        # Перемикання режимів
+        # Перемикання режимів — тільки явні команди, не відлуння
         if mode_callback:
-            if any(p in lower for p in ["iron man mode", "switch to iron man", "activate iron man"]):
-                mode_callback("iron man")
-                _restore_volume(jarvis_brain)
-                return
-            if any(p in lower for p in ["ultron mode", "activate ultron", "switch to ultron", "режим альтрон"]):
-                mode_callback("ultron")
-                _restore_volume(jarvis_brain)
-                return
-
-        # Sleep mode
-        if any(p in lower for p in ["sleep mode", "good night", "на ніч", "спати"]):
-            safe_speak_func("Good night, Sir. Systems entering low-power mode.")
-            _fade_volume(jarvis_brain, target=10)
-            try:
-                from modules.hud_module import socketio
-                socketio.emit('state_update', {'sleep': True})
-            except Exception:
-                pass
-            return
+            if any(p in lower for p in ["switch to iron man", "activate iron man", "iron man mode"]):
+                if not lower.startswith("iron man mode activated"):  # ігноруємо відлуння
+                    mode_callback("iron man")
+                    _restore_volume(jarvis_brain)
+                    return
+            if any(p in lower for p in ["switch to ultron", "activate ultron", "ultron mode", "режим альтрон"]):
+                if not lower.startswith("ultron mode online"):
+                    mode_callback("ultron")
+                    _restore_volume(jarvis_brain)
+                    return
 
         # Завершення сесії тільки по "goodbye"
         exit_phrases = ["goodbye", "good bye", "до побачення", "вийди", "досить", "вільно"]
@@ -178,6 +176,12 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
             return
 
         try:
+            try:
+                from modules.hud_module import update_hud
+                update_hud("status", "THINKING")
+            except Exception:
+                pass
+
             response = jarvis_brain.process(user_text, lang=lang)
 
             if response:
@@ -188,6 +192,12 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
         except Exception as e:
             print(f"[HOME MODE ERROR] {e}")
             safe_speak_func("Sir, there is an error.", "en")
+        finally:
+            try:
+                from modules.hud_module import update_hud
+                update_hud("status", "STANDBY")
+            except Exception:
+                pass
 
         print("[HOME MODE] Слухаю далі...")
 
@@ -215,27 +225,18 @@ def start_ironman_conversation(jarvis_brain, safe_speak_func, mode_callback=None
         silent_streak = 0
         lower = user_text.lower()
 
-        # Перемикання режимів
+        # Перемикання режимів — тільки явні команди, не відлуння
         if mode_callback:
-            if any(p in lower for p in ["home mode", "switch to home"]):
-                mode_callback("home")
-                _restore_volume(jarvis_brain)
-                return
-            if any(p in lower for p in ["ultron mode", "activate ultron", "switch to ultron", "режим альтрон"]):
-                mode_callback("ultron")
-                _restore_volume(jarvis_brain)
-                return
-
-        # Sleep mode
-        if any(p in lower for p in ["sleep mode", "good night", "на ніч", "спати"]):
-            safe_speak_func("Good night, Sir. Systems entering low-power mode.")
-            _fade_volume(jarvis_brain, target=10)
-            try:
-                from modules.hud_module import socketio
-                socketio.emit('state_update', {'sleep': True})
-            except Exception:
-                pass
-            return
+            if any(p in lower for p in ["switch to home", "home mode", "switch to jarvis"]):
+                if not lower.startswith("home mode activated"):  # ігноруємо відлуння
+                    mode_callback("home")
+                    _restore_volume(jarvis_brain)
+                    return
+            if any(p in lower for p in ["switch to ultron", "activate ultron", "ultron mode", "режим альтрон"]):
+                if not lower.startswith("ultron mode online"):
+                    mode_callback("ultron")
+                    _restore_volume(jarvis_brain)
+                    return
 
         try:
             response = jarvis_brain.process(user_text, lang=lang)
@@ -261,7 +262,6 @@ def start_ironman_conversation(jarvis_brain, safe_speak_func, mode_callback=None
 
 
 def _fade_volume(jarvis_brain, target: int, steps: int = 8, delay: float = 0.06):
-    """Плавно змінює гучність до target за steps кроків."""
     try:
         current = jarvis_brain.music_module.sp.current_playback()
         if current and current.get("device"):
@@ -271,13 +271,16 @@ def _fade_volume(jarvis_brain, target: int, steps: int = 8, delay: float = 0.06)
         step_size = (target - start_vol) / steps
         for i in range(steps):
             vol = int(start_vol + step_size * (i + 1))
-            jarvis_brain.music_module.set_volume(vol)
+            try:
+                jarvis_brain.music_module.set_volume(vol)
+            except Exception:
+                pass
             time.sleep(delay)
     except Exception:
         try:
             jarvis_brain.music_module.set_volume(target)
-        except Exception as e:
-            print(f"[DEBUG] Не вдалось змінити гучність: {e}")
+        except Exception:
+            pass
 
 
 def _restore_volume(jarvis_brain):
