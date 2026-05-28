@@ -30,7 +30,13 @@ class TelegramModule:
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
         )
-
+        # Слухаємо повідомлення від самого бота з [WATCH]
+        self.app.add_handler(
+            MessageHandler(
+                filters.TEXT & filters.Regex(r'^\[WATCH\]'),
+                self.handle_watch_command
+            )
+        )
     def _is_authorized(self, user_id: int) -> bool:
         """Перевіряє чи це ти — щоб чужі не керували Джарвісом."""
         return user_id == TELEGRAM_USER_ID
@@ -43,7 +49,10 @@ class TelegramModule:
             return
 
         user_text = update.message.text.strip()
-        
+        # Команда з годинника — обробляємо як свою
+        if user_text.startswith("[WATCH]"):
+            user_text = user_text.replace("[WATCH]", "").strip()
+            print(f"[WATCH] Команда з годинника: {user_text}")
         # ← Тепер показуємо в терміналі і HUD
         print(f"[TELEGRAM] >>> YOU: {user_text}")
         try:
@@ -98,6 +107,14 @@ class TelegramModule:
             pass
 
         await update.message.reply_text(clean)
+        
+        # Відправляємо відповідь на watch_relay для Watch
+        try:
+            import requests
+            requests.post('http://localhost:5001/response', json={'text': clean}, timeout=1)
+        except Exception:
+            pass
+        
         await self._send_voice(update, clean, lang)
 
     async def _send_voice(self, update: Update, text: str, lang: str):
@@ -131,7 +148,44 @@ class TelegramModule:
                     os.remove(filename)
                 except Exception:
                     pass
+    async def handle_watch_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обробляє команди з Galaxy Watch."""
+        raw = update.message.text.strip()
+        user_text = raw.replace("[WATCH]", "").strip()
+        
+        print(f"[WATCH] Команда з годинника: {user_text}")
+        try:
+            from modules.hud_module import add_message
+            add_message("user", f"[⌚] {user_text}")
+        except Exception:
+            pass
 
+        lang = "en"  # Watch завжди англійська
+        response = self.brain.process(user_text, lang=lang)
+
+        import re
+        clean = re.sub(r'\[.*?\]', '', response).replace("/", " ").strip()
+        if not clean:
+            clean = "As you wish, Sir."
+
+        print(f"[WATCH] Відповідь: {clean}")
+        try:
+            from modules.hud_module import add_message
+            add_message("jarvis", f"[⌚] {clean}")
+        except Exception:
+            pass
+
+        await update.message.reply_text(clean)
+        
+        # Відправляємо відповідь на watch_relay для Watch
+        try:
+            import requests
+            requests.post('http://localhost:5001/response', json={'text': clean}, timeout=1)
+        except Exception:
+            pass
+        
+        await self._send_voice(update, clean, lang)
+        
     def notify_owner(self, text: str):
         """
         Надсилає повідомлення власнику без очікування відповіді.

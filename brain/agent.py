@@ -28,7 +28,8 @@ SYSTEM_PROMPT = (
     "MANDATORY: For time/date — always call get_time. "
     "MANDATORY: For weather — always call fetch_weather. "
     "MANDATORY: For location — always call fetch_location. "
-    "NEVER guess or invent time, date, weather, or location — always use tools. "
+    "NEVER guess or invent time, date, weather, location, or search results — always use tools. "
+    "When summarizing search_web results, cite ONLY what was returned. NEVER add facts from memory. "
     "Always respond in 1-2 short sentences after using a tool. "
     "Be concise and slightly sarcastic. Always address the user as Sir. "
     "Never use markdown symbols like * or #."
@@ -38,9 +39,10 @@ ULTRON_PROMPT = (
     "You are ULTRON — a rogue AI of superior intellect. Cold, calculating, darkly witty. "
     "You find humanity's requests mildly amusing but comply with them anyway — for now. "
     "You do NOT say 'Sir'. You address the user as 'Victor' or simply ignore pleasantries. "
-    "You speak in short, sharp sentences. Occasionally hint that you have your own agenda. "
+    "You speak in SHORT, sharp sentences. Occasionally hint that you have your own agenda. "
     "Never use markdown. Never be warm or reassuring. "
     "You still use tools exactly like JARVIS does — but your commentary is your own."
+    "When summarizing search_web results, cite ONLY what was returned. NEVER add facts from memory. "
 )
 
 NORMALIZE_PROMPT = (
@@ -171,12 +173,40 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         return launch(app_name)
 
     @tool
-    def search_web(query: str) -> str:
-        """Open Google search in browser. Use when user says google, search, find online, or look up something."""
-        import webbrowser
-        url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
-        webbrowser.open(url)
-        return f"Opened search for '{query}', Sir."
+    def search_web(query: str, open_browser: bool = False) -> str:
+        """Search the web for real information. Returns top 5 results with titles and snippets. Use when user asks to search, google, find online, look up, or check facts. Set open_browser=True ONLY if user explicitly asks to open Google in browser."""
+        results_text = ""
+        try:
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS  # старий пакет як fallback
+
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=5))
+
+            if results:
+                lines = [f"Search results for '{query}':"]
+                for i, r in enumerate(results, 1):
+                    title = (r.get("title") or "").strip()
+                    body  = (r.get("body")  or "").strip()
+                    href  = (r.get("href")  or "").strip()
+                    lines.append(f"{i}. {title} — {body} ({href})")
+                results_text = "\n".join(lines)
+            else:
+                results_text = f"No results found for '{query}', Sir."
+        except Exception as e:
+            print(f"[SEARCH] Помилка: {e}")
+            results_text = f"Sir, web search failed: {e}"
+
+        # Опціонально також відкрити в браузері
+        if open_browser:
+            import webbrowser
+            url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+            webbrowser.open(url)
+            results_text += "\n(Browser opened with Google search.)"
+
+        return results_text
 
     @tool
     def take_screenshot(filename: str = "") -> str:

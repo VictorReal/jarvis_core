@@ -14,3 +14,7 @@ spotipy
 langdetect
 flask flask-socketio
 librosa
+openwakeword
+onnxruntime
+pyngrok
+ddgs

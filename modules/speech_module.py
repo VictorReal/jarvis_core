@@ -1,4 +1,5 @@
 import re
+import threading
 import speech_recognition as sr
 import sounddevice as sd
 import numpy as np
@@ -8,23 +9,110 @@ import tempfile
 import os
 import time
 
+# Глушимо HTTP-помилки spotipy (виводяться навіть коли ми ловимо exception)
+try:
+    import logging
+    logging.getLogger('spotipy').setLevel(logging.CRITICAL)
+except Exception:
+    pass
+
 recognizer = sr.Recognizer()
 
 # Мовний режим STT — "en" за замовчуванням, "uk" тільки по команді
 _lang_mode = "en"
+
 
 def set_lang_mode(lang: str):
     global _lang_mode
     _lang_mode = lang
     print(f"[SPEECH] Мовний режим: {lang.upper()}")
 
+
+# === Самовідлуння: стан TTS і фільтр ===
+_tts_lock = threading.Lock()
+_tts_active = False  # True поки JARVIS говорить
+_recent_tts: list[tuple[str, float]] = []  # (нормалізований текст, час)
+
+
+def _normalize_for_echo(text: str) -> str:
+    """Нижній регістр + без пунктуації — для порівняння."""
+    return re.sub(r'[^\w\s]', '', text.lower()).strip()
+
+
+def _register_tts(text: str):
+    """Реєструє нову фразу TTS і піднімає прапор активності."""
+    global _tts_active
+    with _tts_lock:
+        _tts_active = True
+        norm = _normalize_for_echo(text)
+        if norm:
+            _recent_tts.append((norm, time.time()))
+            if len(_recent_tts) > 5:
+                _recent_tts.pop(0)
+
+
+def _mark_tts_done():
+    """TTS закінчив — мікрофон знову вільний."""
+    global _tts_active
+    with _tts_lock:
+        _tts_active = False
+
+
+def _wait_while_tts():
+    """Блокує доки JARVIS говорить."""
+    while True:
+        with _tts_lock:
+            if not _tts_active:
+                return
+        time.sleep(0.05)
+
+
+def _is_echo(recognized: str) -> bool:
+    """Чи це наше власне відлуння (страховка після STT)."""
+    if not recognized:
+        return False
+    norm = _normalize_for_echo(recognized)
+    if len(norm) < 8:  # короткі фрази не фільтруємо
+        return False
+    now = time.time()
+    with _tts_lock:
+        active = [(t, ts) for t, ts in _recent_tts if now - ts < 5]
+    norm_words = set(norm.split())
+    for tts_text, _ in active:
+        # recognized — шматок нашої TTS
+        if norm in tts_text:
+            return True
+        # або >=70% слів збігаються (для STT-помилок типу retrieved→retreat)
+        tts_words = set(tts_text.split())
+        if len(norm_words) >= 3 and len(tts_words) >= 3:
+            common = norm_words & tts_words
+            if len(common) / len(norm_words) >= 0.7:
+                return True
+    return False
+
+
+def make_echo_aware(speak_func):
+    """Обгортка TTS: піднімає прапор + реєструє фразу + хвіст 0.25с."""
+    if getattr(speak_func, '_echo_aware', False):
+        return speak_func  # вже обгорнуто — не дубліюємо
+    def wrapped(text, lang):
+        _register_tts(text)
+        try:
+            return speak_func(text, lang)
+        finally:
+            time.sleep(0.25)  # буфер на акустичний хвіст
+            _mark_tts_done()
+    wrapped._echo_aware = True
+    return wrapped
+
+
 class SpeechListener:
     def __init__(self):
         self.fs = 16000
-        self.silence_threshold = 0.01  # підібрано по реальному рівню мікрофона
-        self.silence_duration = 0.8    # секунд тиші після мовлення
-        self.silence_duration_initial = 1.5  # секунд тиші якщо ще не говорив
-        self.min_record_duration = 0.8 # мінімум секунд перед перевіркою тиші
+        self.silence_threshold = 0.004  # знижено: ловить тихий голос
+        self.silence_duration = 0.8     # секунд тиші після мовлення
+        self.silence_duration_initial = 1.5
+        self.min_record_duration = 0.8
         self._recording_data = []
 
     def _audio_callback(self, indata, frames, time_info, status):
@@ -34,9 +122,15 @@ class SpeechListener:
 
     def listen(self) -> tuple[str | None, str]:
         """Повертає (текст, мова) — 'en' або 'uk'."""
+        _wait_while_tts()  # не пишемо поки JARVIS говорить
         self._recording_data = []
-        time.sleep(0.3)  # пауза щоб відлуння TTS затихло
+        time.sleep(0.3)  # буфер на акустичний хвіст
         print("[LISTENING...]")
+        try:
+            from modules.hud_module import update_hud
+            update_hud("status", "LISTENING")
+        except Exception:
+            pass
 
         try:
             with sd.InputStream(
@@ -81,6 +175,11 @@ class SpeechListener:
             filename = tempfile.mktemp(suffix=".wav")
 
             try:
+                # нормалізуємо гучність — підсилюємо тихий голос перед STT
+                audio_float = audio_combined.astype(np.float32)
+                peak = np.max(np.abs(audio_float))
+                if peak > 0 and peak < 16384:  # тихий запис — підсилюємо
+                    audio_combined = np.clip(audio_float * (16384 / peak), -32768, 32767).astype(np.int16)
                 write(filename, self.fs, audio_combined)
                 with sr.AudioFile(filename) as source:
                     audio = recognizer.record(source)
@@ -91,6 +190,11 @@ class SpeechListener:
                         else:
                             user_text = recognizer.recognize_google(audio, language="en-US")
                             lang = "en"
+
+                        # страховка: чи це наше власне відлуння
+                        if _is_echo(user_text):
+                            print(f"[ECHO FILTERED] '{user_text}'")
+                            return None, _lang_mode
 
                         print(f">>> YOU ({lang.upper()}): {user_text}")
                         try:
@@ -128,9 +232,14 @@ def _try_identify_speaker(listener_data: list) -> str | None:
 
 
 def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
-    """HOME MODE — постійна сесія, закривається тільки по 'goodbye'."""
+    """HOME MODE — постійна сесія (HOME або ULTRON), закривається тільки по 'goodbye'."""
+    safe_speak_func = make_echo_aware(safe_speak_func)  # фільтр самовідлуння
     listener = SpeechListener()
-    print("[HOME MODE] Сесію активовано.")
+    mode_label = (getattr(jarvis_brain, 'personality', None)
+                  or getattr(jarvis_brain, 'mode', None)
+                  or 'HOME')
+    mode_label = str(mode_label).upper()
+    print(f"[{mode_label} MODE] Сесію активовано.")
 
     _fade_volume(jarvis_brain, target=20)
 
@@ -139,7 +248,7 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
 
         # Тиша — НЕ закриваємо, просто слухаємо далі
         if not user_text:
-            print("[HOME MODE] Тиша — слухаю далі...")
+            print(f"[{mode_label} MODE] Тиша — слухаю далі...")
             continue
 
         # Ідентифікація мовця — тільки якщо є текст
@@ -161,7 +270,17 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
                     mode_callback("iron man")
                     _restore_volume(jarvis_brain)
                     return
-            if any(p in lower for p in ["switch to ultron", "activate ultron", "ultron mode", "режим альтрон"]):
+            # На HOME/JARVIS повертаємось тільки якщо ми НЕ в HOME (тобто з ULTRON)
+            if mode_label != "HOME" and any(p in lower for p in
+                    ["switch to home", "switch to jarvis", "home mode", "jarvis mode",
+                     "режим джарвіс", "режим хоум"]):
+                if not lower.startswith("home mode activated"):
+                    mode_callback("home")
+                    _restore_volume(jarvis_brain)
+                    return
+            # У ULTRON переходимо тільки якщо ми НЕ в ULTRON
+            if mode_label != "ULTRON" and any(p in lower for p in
+                    ["switch to ultron", "activate ultron", "ultron mode", "режим альтрон"]):
                 if not lower.startswith("ultron mode online"):
                     mode_callback("ultron")
                     _restore_volume(jarvis_brain)
@@ -190,7 +309,7 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
                     safe_speak_func(clean_to_speak, lang)
 
         except Exception as e:
-            print(f"[HOME MODE ERROR] {e}")
+            print(f"[{mode_label} MODE ERROR] {e}")
             safe_speak_func("Sir, there is an error.", "en")
         finally:
             try:
@@ -199,11 +318,12 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
             except Exception:
                 pass
 
-        print("[HOME MODE] Слухаю далі...")
+        print(f"[{mode_label} MODE] Слухаю далі...")
 
 
 def start_ironman_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
     """IRON MAN MODE — разова сесія, закривається по тиші."""
+    safe_speak_func = make_echo_aware(safe_speak_func)  # фільтр самовідлуння
     listener = SpeechListener()
     print("[IRON MAN MODE] Діалог активовано.")
 
@@ -227,7 +347,8 @@ def start_ironman_conversation(jarvis_brain, safe_speak_func, mode_callback=None
 
         # Перемикання режимів — тільки явні команди, не відлуння
         if mode_callback:
-            if any(p in lower for p in ["switch to home", "home mode", "switch to jarvis"]):
+            if any(p in lower for p in ["switch to home", "home mode", "switch to jarvis",
+                                         "режим джарвіс", "режим хоум"]):
                 if not lower.startswith("home mode activated"):  # ігноруємо відлуння
                     mode_callback("home")
                     _restore_volume(jarvis_brain)
@@ -261,26 +382,31 @@ def start_ironman_conversation(jarvis_brain, safe_speak_func, mode_callback=None
         print("[IRON MAN MODE] Слухаю далі...")
 
 
+# Блеклист пристроїв, що не дозволяють керувати гучністю (timestamp до якого не пробуємо)
+_volume_blocked_until = 0.0
+
+
 def _fade_volume(jarvis_brain, target: int, steps: int = 8, delay: float = 0.06):
+    global _volume_blocked_until
+    if time.time() < _volume_blocked_until:
+        return  # пристрій неконтрольований — не пробуємо
     try:
         current = jarvis_brain.music_module.sp.current_playback()
-        if current and current.get("device"):
-            start_vol = current["device"].get("volume_percent", 90)
-        else:
-            start_vol = 90
+        if not current or not current.get("device"):
+            return  # нічого не грає — нема що міняти
+        start_vol = current["device"].get("volume_percent", 90)
         step_size = (target - start_vol) / steps
         for i in range(steps):
             vol = int(start_vol + step_size * (i + 1))
             try:
                 jarvis_brain.music_module.set_volume(vol)
             except Exception:
-                pass
+                # 403 / device unavailable — блекаємо на 5 хв, цикл стоп
+                _volume_blocked_until = time.time() + 300
+                return
             time.sleep(delay)
     except Exception:
-        try:
-            jarvis_brain.music_module.set_volume(target)
-        except Exception:
-            pass
+        pass
 
 
 def _restore_volume(jarvis_brain):

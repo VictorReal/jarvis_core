@@ -1,10 +1,11 @@
 import threading
-import pvporcupine
-from pvrecorder import PvRecorder
 import time
 import os
 import sys
 from dotenv import load_dotenv
+import numpy as np
+import sounddevice as sd
+from pyngrok import ngrok
 
 from modules.voice_module import speak, _voice, set_voice_personality
 from modules.speech_module import start_home_conversation, start_ironman_conversation, set_lang_mode
@@ -31,7 +32,6 @@ def _detect_lang(text: str, fallback: str = "en") -> str:
         return fallback
 
 load_dotenv()
-ACCESS_KEY = os.getenv("ACCESS_KEY")
 
 
 class Jarvis:
@@ -103,6 +103,29 @@ class Jarvis:
                 print("[JARVIS] Calendar notifier запущено")
         else:
             print("[JARVIS] Telegram токен не знайдено — бот вимкнено")
+
+        # Watch Relay + ngrok для Galaxy Watch
+        if os.getenv("API_ID") and os.getenv("API_HASH"):
+            def start_watch_relay():
+                import watch_relay
+                # Запускаємо Telethon в окремому потоці
+                telethon_thread = threading.Thread(target=watch_relay.init_telethon, daemon=True)
+                telethon_thread.start()
+                time.sleep(3)
+                # Запускаємо Flask
+                watch_relay.app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)
+            
+            threading.Thread(target=start_watch_relay, daemon=True).start()
+            time.sleep(2)
+            
+            try:
+                public_url = ngrok.connect(5001)
+                print(f"[WATCH RELAY] ngrok → {public_url}")
+                print("[JARVIS] ⌚ Galaxy Watch готовий")
+            except Exception as e:
+                print(f"[WATCH RELAY] ngrok помилка: {e}")
+        else:
+            print("[JARVIS] Watch relay вимкнено (немає API_ID)")
 
     def safe_speak(self, text: str, lang: str = "en"):
         if _voice.personality == "ultron":
@@ -245,36 +268,79 @@ class Jarvis:
             self.handle_command(text_input, lang=lang)
 
     def run(self):
-        porcupine = pvporcupine.create(
-            access_key=ACCESS_KEY,
-            keywords=['jarvis']
+        from openwakeword.model import Model as WakeWordModel
+
+        # Завантажуємо wake word моделі — тільки jarvis через OWW
+        oww = WakeWordModel(
+            wakeword_models=['wake_words/hey_jarvis.onnx'],
+            inference_framework='onnx',
         )
-        recorder = PvRecorder(frame_length=porcupine.frame_length)
+
+
+        CHUNK      = 1280   # 80мс при 16000Hz — рекомендовано openwakeword
+        # очищаємо буфер після ініціалізації — прибираємо накопичені чанки
+        SAMPLERATE = 16000
+        THRESHOLD  = 0.5    # чутливість (0.0–1.0)
 
         print("Джарвіс: Системи онлайн. Слухаю, сер.")
         threading.Thread(target=self.terminal_listener, daemon=True).start()
 
-        try:
-            while True:
-                if self.is_speaking.is_set():
-                    time.sleep(0.1)
-                    continue
+        audio_buffer = []
 
-                if not recorder.is_recording:
-                    recorder.start()
+        def audio_callback(indata, frames, time_info, status):
+            audio_buffer.append(indata.copy().flatten())
 
-                pcm = recorder.read()
+        with sd.InputStream(
+            samplerate=SAMPLERATE,
+            channels=1,
+            dtype='int16',
+            blocksize=CHUNK,
+            callback=audio_callback,
+        ):
+            try:
+                # чистимо буфер що накопичився під час завантаження моделей
+                time.sleep(0.3)
+                audio_buffer.clear()
 
-                if porcupine.process(pcm) >= 0:
-                    self._sleep_active = False
-                    print(f"\n[Активація! Режим: {self.mode.upper()}]")
-                    recorder.stop()
+                while True:
+                    if self.is_speaking.is_set():
+                        time.sleep(0.05)
+                        audio_buffer.clear()
+                        continue
+
+                    if not audio_buffer:
+                        time.sleep(0.02)
+                        continue
+
+                    chunk = audio_buffer.pop(0)
+
+                    prediction = oww.predict(chunk)
+
+                    # Перевіряємо кожну модель OWW
+                    triggered = None
+                    triggered_score = 0.0
+
+                    for model_name, score in prediction.items():
+                        if score > THRESHOLD and score > triggered_score:
+                            triggered = model_name
+                            triggered_score = score
+
+                    if triggered is None:
+                        continue
+
+                    # Скидаємо стан моделі після активації
+                    oww.reset()
+                    audio_buffer.clear()
+
+                    print(f"\n[Активація! Wake word: {triggered} ({triggered_score:.2f}) Режим: {self.mode.upper()}]")
                     update_hud("status", "LISTENING")
+                    self._sleep_active = False
 
                     try:
                         self.brain.music_module.set_volume(35)
                     except Exception:
                         pass
+
                     if self.mode == "ultron":
                         self.safe_speak("I'm listening, Victor.", lang="en")
                     else:
@@ -288,6 +354,9 @@ class Jarvis:
                     else:
                         start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
 
+                    # чистимо буфер після розмови — прибираємо TTS-луну що накопичилась
+                    audio_buffer.clear()
+
                     try:
                         self.brain.music_module.set_volume(90)
                     except Exception:
@@ -295,18 +364,16 @@ class Jarvis:
                     update_hud("status", "STANDBY")
                     print("[Повернення в режим очікування]")
 
-        except KeyboardInterrupt:
-            print("\n[Завершення роботи...]")
-        except Exception as e:
-            print(f"[CRITICAL ERROR] {e}")
-        finally:
-            self.spotify_poller.stop()
-            self.weather_alert.stop()
-            if self.cal_notifier:
-                self.cal_notifier.stop()
-            recorder.delete()
-            porcupine.delete()
-            print("[Системи офлайн]")
+            except KeyboardInterrupt:
+                print("\n[Завершення роботи...]")
+            except Exception as e:
+                print(f"[CRITICAL ERROR] {e}")
+            finally:
+                self.spotify_poller.stop()
+                self.weather_alert.stop()
+                if self.cal_notifier:
+                    self.cal_notifier.stop()
+                print("[Системи офлайн]")
 
 
 if __name__ == "__main__":

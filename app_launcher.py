@@ -1,14 +1,34 @@
 """
 app_launcher.py — Запуск застосунків для JARVIS
 Fuzzy match назви → команда. Крос-платформно (Windows / Linux / macOS).
+Перевіряє доступність до запуску, повертає чесний результат.
 """
 
 import subprocess
 import platform
 import logging
+import shutil
+import os
 from difflib import get_close_matches
 
 logger = logging.getLogger(__name__)
+
+# --------------------------------------------------------------------------- #
+#  URI-схеми для UWP/Store-додатків на Windows
+#  Працюють, якщо застосунок встановлений і зареєстрував свій handler
+# --------------------------------------------------------------------------- #
+WINDOWS_URI = {
+    "whatsapp":     "whatsapp://",
+    "telegram":     "tg://",
+    "spotify":      "spotify:",
+    "discord":      "discord://",
+    "settings":     "ms-settings:",
+    "store":        "ms-windows-store:",
+    "ms store":     "ms-windows-store:",
+    "skype":        "skype:",
+    "zoom":         "zoommtg://",
+    "outlook":      "outlook:",
+}
 
 # --------------------------------------------------------------------------- #
 #  База застосунків: alias → (windows_cmd, linux_cmd, mac_cmd)
@@ -44,6 +64,7 @@ APP_MAP = {
     "excel":        ("excel",               "libreoffice --calc",   "open -a 'Microsoft Excel'"),
     "powerpoint":   ("powerpnt",            "libreoffice --impress","open -a 'Microsoft PowerPoint'"),
     "libreoffice":  ("soffice",             "libreoffice",          "open -a LibreOffice"),
+    "outlook":      ("outlook",             None,                   "open -a 'Microsoft Outlook'"),
 
     # Месенджери
     "telegram":     ("telegram",            "telegram-desktop",     "open -a Telegram"),
@@ -51,6 +72,8 @@ APP_MAP = {
     "slack":        ("slack",               "slack",                "open -a Slack"),
     "teams":        ("teams",               None,                   "open -a 'Microsoft Teams'"),
     "whatsapp":     ("whatsapp",            None,                   "open -a WhatsApp"),
+    "skype":        ("skype",               "skype",                "open -a Skype"),
+    "zoom":         ("zoom",                "zoom",                 "open -a zoom.us"),
 
     # Система
     "calculator":   ("calc",                "gnome-calculator",     "open -a Calculator"),
@@ -69,47 +92,105 @@ APP_MAP = {
 OS_INDEX = {"Windows": 0, "Linux": 1, "Darwin": 2}
 
 
-def launch(app_name: str) -> str:
+def _launch_windows(key: str, display: str, cmd: str | None) -> tuple[bool, str]:
     """
-    Запускає застосунок за назвою.
-    Повертає рядок-результат для Джарвіса.
+    Стратегії запуску на Windows у такому порядку:
+      1. URI-схема (для UWP/Store: WhatsApp, Telegram, Spotify, тощо)
+      2. shutil.which + Popen (звичайні exe у PATH)
+      3. os.startfile (для зареєстрованих хендлерів типу ms-settings:)
     """
-    key = app_name.lower().strip()
-    system = platform.system()
-    os_idx = OS_INDEX.get(system, 1)
+    # 1. URI-схема
+    uri = WINDOWS_URI.get(key)
+    if uri:
+        try:
+            os.startfile(uri)
+            logger.info(f"[LAUNCHER] URI '{uri}' для {display}")
+            return True, f"Opening {display}, Sir."
+        except OSError as e:
+            logger.info(f"[LAUNCHER] URI '{uri}' не зареєстровано: {e}")
+            # йдемо далі — може це звичайний exe
 
-    # 1. Точний збіг
-    entry = APP_MAP.get(key)
+    if not cmd:
+        return False, f"Sir, {display} is not installed or not registered on this system."
 
-    # 2. Fuzzy match якщо точного нема
-    if not entry:
-        matches = get_close_matches(key, APP_MAP.keys(), n=1, cutoff=0.6)
-        if matches:
-            entry = APP_MAP[matches[0]]
-            logger.info(f"[LAUNCHER] Fuzzy: '{key}' → '{matches[0]}'")
+    # 2. Перевірка через PATH
+    first_word = cmd.split()[0]
+    exe = shutil.which(first_word)
+    if exe:
+        try:
+            if ' ' in cmd:
+                subprocess.Popen(cmd, shell=True)
+            else:
+                subprocess.Popen([exe], shell=False)
+            logger.info(f"[LAUNCHER] Запущено exe: {exe}")
+            return True, f"Opening {display}, Sir."
+        except Exception as e:
+            logger.warning(f"[LAUNCHER] Popen помилка: {e}")
 
-    # 3. Якщо взагалі нічого — пробуємо запустити як є
-    cmd = entry[os_idx] if entry else None
+    # 3. os.startfile (для ms-settings: і подібних URI у APP_MAP)
+    try:
+        os.startfile(cmd)
+        logger.info(f"[LAUNCHER] startfile: {cmd}")
+        return True, f"Opening {display}, Sir."
+    except OSError as e:
+        logger.warning(f"[LAUNCHER] startfile fail: {e}")
 
-    if cmd is None:
-        return f"Sir, I don't have '{app_name}' mapped for {system}."
+    return False, f"Sir, I couldn't find {display} — not installed or not in PATH."
+
+
+def _launch_unix(system: str, display: str, cmd: str | None) -> tuple[bool, str]:
+    """Лінукс/мак: перевірка PATH + Popen."""
+    if not cmd:
+        return False, f"Sir, I don't have '{display}' mapped for {system}."
+
+    # macOS використовує 'open -a "App"' — exec існує (open), тому перевірка пропускається
+    if system != "Darwin":
+        first_word = cmd.split()[0]
+        if not shutil.which(first_word):
+            return False, f"Sir, {first_word} doesn't seem to be installed."
 
     try:
-        if system == "Windows":
-            subprocess.Popen(cmd, shell=True)
-        elif system == "Darwin":
+        if system == "Darwin":
             subprocess.Popen(cmd, shell=True)
         else:
-            # Linux — пробуємо як список, fallback на shell
             try:
                 subprocess.Popen(cmd.split())
             except FileNotFoundError:
                 subprocess.Popen(cmd, shell=True)
-
-        display = app_name.title()
-        logger.info(f"[LAUNCHER] Запущено: {cmd}")
-        return f"Opening {display}, Sir."
-
+        return True, f"Opening {display}, Sir."
     except Exception as e:
         logger.error(f"[LAUNCHER] Помилка: {e}")
-        return f"Sir, I couldn't launch {app_name}: {e}"
+        return False, f"Sir, I couldn't launch {display}: {e}"
+
+
+def launch(app_name: str) -> str:
+    """
+    Запускає застосунок за назвою. Повертає рядок-результат для Джарвіса.
+    На успіх: 'Opening X, Sir.'  На невдачу: чесне 'Sir, I couldn't...'.
+    """
+    key = app_name.lower().strip()
+    system = platform.system()
+    display = app_name.title()
+
+    # Точний збіг
+    entry = APP_MAP.get(key)
+    matched_key = key
+
+    # Fuzzy match якщо точного нема
+    if not entry:
+        matches = get_close_matches(key, APP_MAP.keys(), n=1, cutoff=0.6)
+        if matches:
+            matched_key = matches[0]
+            entry = APP_MAP[matched_key]
+            logger.info(f"[LAUNCHER] Fuzzy: '{key}' → '{matched_key}'")
+
+    os_idx = OS_INDEX.get(system, 1)
+    cmd = entry[os_idx] if entry else None
+
+    if system == "Windows":
+        success, msg = _launch_windows(matched_key, display, cmd)
+    else:
+        success, msg = _launch_unix(system, display, cmd)
+
+    (logger.info if success else logger.warning)(f"[LAUNCHER] {msg}")
+    return msg

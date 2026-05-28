@@ -4,11 +4,28 @@
       "date": "2026-05-23",
       "facts": [
         "Sir interacted with JARVIS in multiple short conversations",
-        "Sir mentioned 'Ultron' and 'Ultra Mode'",
+        "Sir mentioned 'Ultron'",
         "JARVIS quoted a wise saying",
         "Sir spoke in Ukrainian",
         "JARVIS understands Ukrainian",
         "Sir referenced JARVIS's portrayal in the Iron Man movies"
+      ]
+    },
+    {
+      "date": "2026-05-25",
+      "facts": [
+        "Sir prefers relaxing at 23:04",
+        "Sir interacted with JARVIS at 22:42",
+        "JARVIS referred to Sir as Victor"
+      ]
+    },
+    {
+      "date": "2026-05-27",
+      "facts": [
+        "Sir greeted JARVIS at 19:47",
+        "Sir mistakenly called JARVIS 'Anakin' at 19:48",
+        "Searched for latest AI news at 20:07",
+        "Sir prefers to be addressed correctly"
       ]
     }
   ]
