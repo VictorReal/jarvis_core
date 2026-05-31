@@ -92,6 +92,26 @@ class Jarvis:
             self.weather_alert._telegram = self.telegram.notify_owner
             self.briefing._telegram = self.telegram.notify_owner
 
+            # Mood: підключаємо Telegram-доставку (текст + дашборд-фото)
+            try:
+                from modules.mood_analytics.jarvis_integration import register_telegram as register_mood_telegram
+                register_mood_telegram(
+                    notify_text=self.telegram.notify_owner,
+                    notify_photo=self.telegram.notify_photo,
+                )
+            except Exception as e:
+                print(f"[JARVIS] Mood Telegram-доставку не підключено: {e}")
+
+            # Cross-correlation: підключення Telegram-доставки (як у mood)
+            try:
+                from modules.correlation_analytics.jarvis_integration import register_telegram as corr_register_tg
+                corr_register_tg(
+                    notify_text=self.telegram.notify_owner,        # твоя функція тексту
+                    notify_photo=self.telegram.notify_photo,       # твоя функція фото (path, caption)
+                )
+            except Exception as e:
+                print(f"[MAIN] Correlation Telegram не підключено: {e}")
+
             # Calendar Notifier — потребує telegram.notify_owner
             if self.brain.calendar:
                 self.cal_notifier = CalendarNotifier(

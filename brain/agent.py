@@ -17,6 +17,7 @@ from brain.memory_engine import (
 
 import logging
 import time
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -177,10 +178,7 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         """Search the web for real information. Returns top 5 results with titles and snippets. Use when user asks to search, google, find online, look up, or check facts. Set open_browser=True ONLY if user explicitly asks to open Google in browser."""
         results_text = ""
         try:
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                from duckduckgo_search import DDGS  # старий пакет як fallback
+            from ddgs import DDGS
 
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=5))
@@ -300,19 +298,47 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         return f"Timer set for {minutes} minutes, Sir."
 
     @tool
-    def set_reminder(message: str, minutes: float) -> str:
-        """Set a voiced reminder. Use when user says remind me to X in N minutes.
-        message: what to remind about. minutes: how many minutes from now (can be decimal)."""
+    def set_reminder(message: str, minutes: float = 0, when: str = "") -> str:
+        """Set a voiced reminder. Use when user says remind me to X.
+        message: what to remind about.
+        minutes: how many minutes from now (for 'in 5 minutes', 'in 2 hours').
+        when: natural language like 'tomorrow at 9am', 'next monday 14:00', 'in 3 days' (for absolute dates).
+        Use either minutes OR when, not both."""
         if reminder_module is None:
             return "Sir, the reminder system is offline."
+
+        if when and not minutes:
+            try:
+                import dateparser
+                from datetime import datetime
+                target = dateparser.parse(
+                    when,
+                    settings={"PREFER_DATES_FROM": "future", "RETURN_AS_TIMEZONE_AWARE": False},
+                )
+                if not target:
+                    return f"Sir, I couldn't understand '{when}'. Try 'tomorrow at 9am' or 'in 3 hours'."
+                delta = (target - datetime.now()).total_seconds() / 60
+                if delta <= 0:
+                    return f"Sir, '{when}' is in the past."
+                minutes = delta
+            except ImportError:
+                return "Sir, dateparser library is not installed. Run: pip install dateparser"
+
+        if minutes <= 0:
+            return "Sir, please specify either minutes or a future time."
+
         seconds = int(minutes * 60)
         reminder_module.set(message, seconds)
         if minutes < 1:
             time_str = f"{int(seconds)} seconds"
-        elif minutes == int(minutes):
-            time_str = f"{int(minutes)} minute{'s' if minutes != 1 else ''}"
+        elif minutes < 60:
+            time_str = f"{int(minutes)} minute{'s' if int(minutes) != 1 else ''}"
+        elif minutes < 1440:
+            hours = minutes / 60
+            time_str = f"{hours:.1f} hour{'s' if hours != 1 else ''}"
         else:
-            time_str = f"{minutes:.1f} minutes"
+            days = minutes / 1440
+            time_str = f"{days:.1f} day{'s' if days != 1 else ''}"
         return f"Reminder set for {time_str} from now: '{message}', Sir."
 
     # ------------------------------------------------------------------ #
@@ -381,22 +407,48 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
             return f"Sir, calendar system is unavailable: {e}"
 
     @tool
-    def add_calendar_event(title: str, date: str, time: str,
+    def add_calendar_event(title: str, date: str, time: str = "",
                            duration_minutes: int = 60, location: str = "") -> str:
         """Add event to Google Calendar. Use when user says add event, schedule meeting, remind me on date.
-        title: event name. date: YYYY-MM-DD. time: HH:MM (24h). duration_minutes: default 60. location: optional."""
+        title: event name.
+        date: can be 'YYYY-MM-DD' or natural language like 'tomorrow', 'next monday', 'in 3 days', 'friday'.
+        time: 'HH:MM' (24h) or natural like '3pm', '9:30am'. If empty, defaults to 12:00.
+        duration_minutes: default 60. location: optional."""
         try:
             from modules.calendar_module import CalendarModule
             from datetime import datetime, timedelta
+            import dateparser
 
-            start_dt = datetime.strptime(date + " " + time, "%Y-%m-%d %H:%M")
-            end_dt   = start_dt + timedelta(minutes=duration_minutes)
+            # Гнучкий парсинг — об'єднуємо date + time і даємо dateparser
+            combined = f"{date} {time}".strip()
+            start_dt = dateparser.parse(
+                combined,
+                settings={"PREFER_DATES_FROM": "future", "RETURN_AS_TIMEZONE_AWARE": False},
+            )
 
-            tz = "+03:00"
+            if not start_dt:
+                return (f"Sir, I couldn't parse the date/time '{combined}'. "
+                        f"Try 'tomorrow 3pm' or '2026-05-30 15:00'.")
+
+            # Якщо time не вказано — defaults to noon
+            if not time and start_dt.hour == 0 and start_dt.minute == 0:
+                start_dt = start_dt.replace(hour=12)
+
+            # Захист: подія не може бути в минулому
+            if start_dt < datetime.now():
+                return f"Sir, '{combined}' resolves to a past date ({start_dt.strftime('%Y-%m-%d %H:%M')}). Please specify a future date."
+
+            end_dt = start_dt + timedelta(minutes=duration_minutes)
+
+            tz = "+03:00"  # Kyiv time
             start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%S") + tz
             end_iso   = end_dt.strftime("%Y-%m-%dT%H:%M:%S") + tz
 
-            return CalendarModule().create_event(title, start_iso, end_iso, location)
+            result = CalendarModule().create_event(title, start_iso, end_iso, location)
+            return f"{result} Scheduled for {start_dt.strftime('%A, %d %b %Y at %H:%M')}."
+
+        except ImportError:
+            return "Sir, dateparser library is not installed. Run: pip install dateparser"
         except Exception as e:
             return f"Sir, I couldn't create the event: {e}"
 
@@ -557,8 +609,102 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
             )
         except Exception as e:
             return f"Sir, network check failed: {e}"
+    # ------------------------------------------------------------------ #
+    #  Health                                                             #
+    # ------------------------------------------------------------------ #
+
+    @tool
+    def health_report(period: str = "week") -> str:
+        """Analyzes Samsung Health data (steps, sleep, heart rate, exercise) for a period.
+        Args:
+            period: today, week, month, year, or all
+        Returns: a multi-section text report.
+        Use when user asks about their health, steps, sleep, fitness, or activity."""
+        from modules.health_analytics.jarvis_integration import health_report_tool
+        return health_report_tool(period=period, send_telegram=False)
+
+
+    @tool
+    def health_report_to_telegram(period: str = "week") -> str:
+        """Sends a Samsung Health report AND dashboard image to the user's Telegram.
+        Args:
+            period: today, week, month, year, or all
+        Use when user explicitly asks to send their health report/dashboard to Telegram."""
+        from modules.health_analytics.jarvis_integration import health_report_tool
+        return health_report_tool(period=period, send_telegram=True)
+    # ------------------------------------------------------------------ #
+    #  Money                                                            #
+    # ------------------------------------------------------------------ #
+    @tool
+    def money_report(period: str = "month") -> str:
+        """Analyzes Money Manager expenses and income for a period.
+        Args:
+            period: today, week, month, year, or all
+        Returns: a finance report (spent, earned, net, top categories, needs/wants split).
+        Use when user asks about money, spending, expenses, budget, finance, savings."""
+        from modules.money_analytics.jarvis_integration import money_report_tool
+        return money_report_tool(period=period)
+
+
+    @tool
+    def money_report_to_telegram(period: str = "month") -> str:
+        """Sends a Money Manager finance report AND dashboard image to user's Telegram.
+        Args:
+            period: today, week, month, year, or all
+        Use when user explicitly asks to send their finance report to Telegram."""
+        from modules.money_analytics.jarvis_integration import money_report_tool
+        return money_report_tool(period=period, send_telegram=True)
 
     # ------------------------------------------------------------------ #
+    #  Mood                                                              #
+    # ------------------------------------------------------------------ #
+    @tool
+    def log_mood(score: int, tags: str = "", note: str = "") -> str:
+        """Log the user's current mood. Use when user states how they feel with a 1-10 rating,
+        e.g. 'mood 7 tired', 'log my mood as 8 happy', 'I feel like a 4 today, anxious'.
+        Args:
+            score: 1-10 rating.
+            tags: optional comma/semicolon-separated mood tags (energetic, tired, anxious, happy, calm, stressed, etc).
+            note: optional free-text note.
+        """
+        from modules.mood_analytics.jarvis_integration import log_mood_tool
+        return log_mood_tool(score=score, tags=tags, note=note, source="voice")
+
+    @tool
+    def mood_report(period: str = "week") -> str:
+        """Analyzes the user's logged mood for a period.
+        Args:
+            period: today, week, month, year, or all
+        Returns: average, trend, morning vs evening, top tags, logging streak.
+        Use when user asks about their mood, how they've been feeling, mood trend or stats."""
+        from modules.mood_analytics.jarvis_integration import mood_report_tool
+        return mood_report_tool(period=period, send_telegram=False)
+
+    @tool
+    def mood_report_to_telegram(period: str = "week") -> str:
+        """Sends a mood report AND dashboard image to the user's Telegram.
+        Args:
+            period: today, week, month, year, or all
+        Use when user explicitly asks to send their mood report to Telegram."""
+        from modules.mood_analytics.jarvis_integration import mood_report_tool
+        return mood_report_tool(period=period, send_telegram=True)
+
+    @tool
+    def cross_correlation_report() -> str:
+        """Analyzes relationships between the user's sleep, steps, resting heart rate, mood and spending.
+        Finds which metrics move together (e.g. does better sleep mean better mood, does low mood mean more spending).
+        Returns the strongest correlations, lagged effects and actionable insights.
+        Use when the user asks how their habits relate, what affects their mood/sleep/spending,
+        or asks for cross-metric patterns and correlations."""
+        from modules.correlation_analytics.jarvis_integration import cross_correlation_report_tool
+        return cross_correlation_report_tool(send_telegram=False)
+
+    @tool
+    def cross_correlation_to_telegram() -> str:
+        """Sends the cross-correlation report AND dashboard image to the user's Telegram.
+        Use when the user explicitly asks to send correlation analysis to Telegram."""
+        from modules.correlation_analytics.jarvis_integration import cross_correlation_report_tool
+        return cross_correlation_report_tool(send_telegram=True)
 
     return [
         play_music, set_volume, stop_music,
@@ -575,7 +721,10 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         analyze_screenshot, read_text_from_screenshot,
         api_usage_status,
         find_drive_file, open_drive_file,
-        network_status,
+        network_status, health_report, health_report_to_telegram, 
+        money_report, money_report_to_telegram,
+        log_mood, mood_report, mood_report_to_telegram,
+        cross_correlation_report, cross_correlation_to_telegram
     ]
 
 
@@ -607,8 +756,11 @@ class JarvisAgent:
         except Exception:
             pass
 
-        # Запускаємо фонове оновлення short/long memory
-        schedule_memory_updates(self.llm)
+        # Запускаємо фонове оновлення short/long memory.
+        # ВАЖЛИВО: окремий llm з великим лімітом токенів — інакше JSON-вивід
+        # (до 20 фактів) ріжеться по ліміту і ламає json.loads (Unterminated string).
+        self.llm_memory = self._create_llm(self.models[0], max_tokens=1024)
+        schedule_memory_updates(self.llm_memory)
 
     def set_personality(self, mode: str):
         """Перемикає характер: 'jarvis' або 'ultron'."""
@@ -658,9 +810,20 @@ class JarvisAgent:
         )
         people_context = get_profiles_summary()
         memory_context = build_memory_context()
+
+        # Інжектимо поточну дату/час — інакше LLM галюцинує дати з тренувального датасету
+        now = datetime.now()
+        date_context = (
+            f"Current date and time: {now.strftime('%A, %d %B %Y, %H:%M')} "
+            f"(today is {now.strftime('%Y-%m-%d')}, tomorrow is "
+            f"{(now + timedelta(days=1)).strftime('%Y-%m-%d')}). "
+            f"When scheduling events or reminders, calculate dates from this current date."
+        )
+
         system_with_lang = (
             base_prompt
             + f" {lang_instruction}"
+            + f" {date_context}"
             + f" People you know: {people_context}."
             + (f" {memory_context}" if memory_context else "")
         )

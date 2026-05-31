@@ -27,6 +27,33 @@
         "Searched for latest AI news at 20:07",
         "Sir prefers to be addressed correctly"
       ]
+    },
+    {
+      "date": "2026-05-28",
+      "facts": [
+        "Sir received a phone number inquiry at 18:41:34",
+        "Sir's phone number is +380678996110"
+      ]
+    },
+    {
+      "date": "2026-05-29",
+      "facts": [
+        "Sir is near Strada Prieteniei 173 in Otaci",
+        "Sir inquired about monthly expenses",
+        "JARVIS interacted with Sir multiple times before",
+        "Sir's name is not explicitly stated in JARVIS records",
+        "Sir prefers to be referred as 'Sir'"
+      ]
+    },
+    {
+      "date": "2026-05-30",
+      "facts": [
+        "Sir has multiple friends: Andriy, Sasha (twice), Serhiy, Seryoha, Bohdan",
+        "Created profiles for friends with relationships",
+        "Assigned personality traits to friends: Andriy (kind, gentle), Sasha (outgoing, adventurous)",
+        "Sir interacts with JARVIS frequently throughout the day",
+        "Sir requests weather update at 12:47"
+      ]
     }
   ]
 }

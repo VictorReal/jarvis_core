@@ -7,3 +7,5 @@ token.json
 api_usage.json
 data/chat_history.jsoncredentials.json
 token.json
+data/
+*.csv

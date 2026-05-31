@@ -18,3 +18,7 @@ openwakeword
 onnxruntime
 pyngrok
 ddgs
+pandas 
+matplotlib
+openpyxl 
+dateparser

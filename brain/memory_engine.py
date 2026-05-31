@@ -52,6 +52,78 @@ def _save_json(path: Path, data):
         logger.warning(f"[MEMORY ENGINE] Помилка збереження {path}: {e}")
 
 
+def _safe_json_array(raw: str):
+    """
+    Парсить JSON-масив з відповіді LLM, переживаючи типові поломки:
+      - markdown-обгортку ```json ... ```
+      - зайвий текст до/після масиву
+      - ОБІРВАНИЙ вивід (ліміт токенів) — Unterminated string / немає ']'
+    Повертає list (можливо неповний, але валідний) або [] якщо нічого не врятувати.
+    """
+    if not raw:
+        return []
+    # Прибираємо markdown-огорожу
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    # Вирізаємо від першої '[' до останньої ']'
+    start = raw.find("[")
+    if start < 0:
+        return []
+    end = raw.rfind("]")
+    candidate = raw[start:end + 1] if end > start else raw[start:]
+
+    # Спроба 1: цілісний масив
+    try:
+        result = json.loads(candidate)
+        return result if isinstance(result, list) else []
+    except json.JSONDecodeError:
+        pass
+
+    # Спроба 2: вивід обірвано — збираємо цілі елементи поелементно.
+    # Дужку-відкривачку відкидаємо і парсимо кожен top-level елемент окремо.
+    body = candidate[1:]  # без '['
+    items = []
+    depth = 0
+    in_str = False
+    esc = False
+    buf = []
+    for ch in body:
+        if esc:
+            buf.append(ch); esc = False; continue
+        if ch == "\\":
+            buf.append(ch); esc = True; continue
+        if ch == '"':
+            in_str = not in_str; buf.append(ch); continue
+        if in_str:
+            buf.append(ch); continue
+        if ch in "{[":
+            depth += 1; buf.append(ch); continue
+        if ch in "}]":
+            if depth == 0:  # дійшли до закриття масиву
+                break
+            depth -= 1; buf.append(ch); continue
+        if ch == "," and depth == 0:
+            piece = "".join(buf).strip()
+            if piece:
+                try:
+                    items.append(json.loads(piece))
+                except json.JSONDecodeError:
+                    pass
+            buf = []
+            continue
+        buf.append(ch)
+    # Останній елемент (якщо він повний)
+    piece = "".join(buf).strip()
+    if piece:
+        try:
+            items.append(json.loads(piece))
+        except json.JSONDecodeError:
+            pass  # обірваний хвіст — свідомо ігноруємо
+
+    if items:
+        logger.info(f"[MEMORY ENGINE] JSON обірвано — врятовано {len(items)} елементів")
+    return items
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  1. Session summary  (стискання старої частини chat_history)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,16 +222,9 @@ def update_short_memory(llm):
         ])
 
         raw = resp.content.strip()
-        # Чистимо markdown якщо є
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        # Знаходимо JSON масив навіть якщо є зайвий текст навколо
-        start = raw.find("[")
-        end = raw.rfind("]") + 1
-        if start < 0 or end <= start:
-            return
-        raw = raw[start:end]
-        facts = json.loads(raw)
-        if not isinstance(facts, list):
+        # Чистимо markdown і рятуємо навіть обірваний JSON
+        facts = _safe_json_array(raw)
+        if not facts:
             return
 
         data = _load_json(SHORT_MEM_FILE, {"entries": []})
@@ -231,8 +296,8 @@ def update_long_memory(llm):
         ])
 
         raw = resp.content.strip().replace("```json", "").replace("```", "").strip()
-        facts = json.loads(raw)
-        if not isinstance(facts, list):
+        facts = _safe_json_array(raw)
+        if not facts:
             return
 
         _save_json(LONG_MEM_FILE, {
@@ -282,8 +347,8 @@ def extract_and_save_people(user_input: str, jarvis_response: str, llm):
                 HumanMessage(content=exchange),
             ])
             raw = resp.content.strip().replace("```json", "").replace("```", "").strip()
-            items = json.loads(raw)
-            if not isinstance(items, list) or not items:
+            items = _safe_json_array(raw)
+            if not items:
                 return
 
             from modules.people_module import get_profile, create_profile, add_fact

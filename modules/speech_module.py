@@ -322,64 +322,60 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
 
 
 def start_ironman_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
-    """IRON MAN MODE — разова сесія, закривається по тиші."""
+    """
+    IRON MAN MODE — рація:
+    одна команда → одна відповідь → одразу закрилось (до наступного wake word).
+    """
     safe_speak_func = make_echo_aware(safe_speak_func)  # фільтр самовідлуння
     listener = SpeechListener()
-    print("[IRON MAN MODE] Діалог активовано.")
+    print("[IRON MAN MODE] Рація активована — слухаю одну команду.")
 
+    # Чекаємо першу нетихову команду (з обмеженням на максимум 3 пусті слухання)
     silent_streak = 0
-    max_silent = 2
-
-    while True:
+    user_text, lang = None, "en"
+    while silent_streak < 3:
         user_text, lang = listener.listen()
-
-        if not user_text:
-            silent_streak += 1
-            print(f"[IRON MAN MODE] Тиша {silent_streak}/{max_silent}")
-            if silent_streak >= max_silent:
-                print("[IRON MAN MODE] Сесія закрита по таймауту.")
-                _restore_volume(jarvis_brain)
-                break
-            continue
-
-        silent_streak = 0
-        lower = user_text.lower()
-
-        # Перемикання режимів — тільки явні команди, не відлуння
-        if mode_callback:
-            if any(p in lower for p in ["switch to home", "home mode", "switch to jarvis",
-                                         "режим джарвіс", "режим хоум"]):
-                if not lower.startswith("home mode activated"):  # ігноруємо відлуння
-                    mode_callback("home")
-                    _restore_volume(jarvis_brain)
-                    return
-            if any(p in lower for p in ["switch to ultron", "activate ultron", "ultron mode", "режим альтрон"]):
-                if not lower.startswith("ultron mode online"):
-                    mode_callback("ultron")
-                    _restore_volume(jarvis_brain)
-                    return
-
-        try:
-            response = jarvis_brain.process(user_text, lang=lang)
-
-            if response:
-                res_upper = response.upper()
-                clean = re.sub(r'\[.*?\]', '', response).replace("/", " ").strip()
-
-                if clean:
-                    safe_speak_func(clean, lang)
-
-                if "[EXIT]" in res_upper:
-                    _restore_volume(jarvis_brain)
-                    break
-
-        except Exception as e:
-            print(f"[IRON MAN MODE ERROR] {e}")
-            safe_speak_func("Sir, there was an error.", "en")
-            _restore_volume(jarvis_brain)
+        if user_text:
             break
+        silent_streak += 1
+        print(f"[IRON MAN MODE] Тиша {silent_streak}/3 — ще чекаю команду...")
 
-        print("[IRON MAN MODE] Слухаю далі...")
+    # Якщо так і нічого не сказали — мовчки закриваємось
+    if not user_text:
+        print("[IRON MAN MODE] Нема команди — закриваюсь.")
+        _restore_volume(jarvis_brain)
+        return
+
+    lower = user_text.lower()
+
+    # Перемикання режимів — тільки явні команди, не відлуння
+    if mode_callback:
+        if any(p in lower for p in ["switch to home", "home mode", "switch to jarvis",
+                                     "режим джарвіс", "режим хоум"]):
+            if not lower.startswith("home mode activated"):  # ігноруємо відлуння
+                mode_callback("home")
+                _restore_volume(jarvis_brain)
+                return
+        if any(p in lower for p in ["switch to ultron", "activate ultron", "ultron mode", "режим альтрон"]):
+            if not lower.startswith("ultron mode online"):
+                mode_callback("ultron")
+                _restore_volume(jarvis_brain)
+                return
+
+    # Виконуємо команду — і ОДРАЗУ закриваємось після відповіді
+    try:
+        response = jarvis_brain.process(user_text, lang=lang)
+        if response:
+            clean = re.sub(r'\[.*?\]', '', response).replace("/", " ").strip()
+            if clean:
+                safe_speak_func(clean, lang)
+    except Exception as e:
+        print(f"[IRON MAN MODE ERROR] {e}")
+        safe_speak_func("Sir, there was an error.", "en")
+
+    print("[IRON MAN MODE] Команду виконано — рація закрита.")
+    _restore_volume(jarvis_brain)
+    return
 
 
 # Блеклист пристроїв, що не дозволяють керувати гучністю (timestamp до якого не пробуємо)
