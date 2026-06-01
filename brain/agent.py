@@ -59,7 +59,7 @@ NORMALIZE_PROMPT = (
 )
 
 
-def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=None):
+def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=None, triggers_module=None):
 
     def normalize_query(query: str) -> str:
         response = llm.invoke([
@@ -340,6 +340,57 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
             days = minutes / 1440
             time_str = f"{days:.1f} day{'s' if days != 1 else ''}"
         return f"Reminder set for {time_str} from now: '{message}', Sir."
+
+    @tool
+    def add_weather_trigger(action: str, phenomenon: str = "rain") -> str:
+        """Set a conditional reminder that fires when a weather phenomenon is expected.
+        Use when user says 'remind me to X if it rains', 'warn me when it snows', etc.
+        action: what to remind (e.g. 'take an umbrella').
+        phenomenon: one of rain, snow, storm, fog, freezing."""
+        if triggers_module is None:
+            return "Sir, the trigger system is offline."
+        phenomenon = phenomenon.lower().strip()
+        valid = ["rain", "snow", "storm", "fog", "freezing"]
+        if phenomenon not in valid:
+            phenomenon = "rain"
+        triggers_module.add(action, {"type": "weather", "phenomenon": phenomenon})
+        return f"Done, Sir. I'll remind you to {action} when {phenomenon} is expected."
+
+    @tool
+    def add_temperature_trigger(action: str, op: str, value: float, feels_like: bool = False) -> str:
+        """Set a conditional reminder that fires when temperature crosses a threshold.
+        Use for 'tell me when it drops below 0', 'warn me if it gets hotter than 25'.
+        action: what to remind.
+        op: comparison, one of '<', '>', '<=', '>='.
+        value: temperature in Celsius.
+        feels_like: True to use feels-like temperature instead of actual."""
+        if triggers_module is None:
+            return "Sir, the trigger system is offline."
+        if op not in ["<", ">", "<=", ">="]:
+            return "Sir, comparison must be one of < > <= >=."
+        ctype = "temp_feels" if feels_like else "temp"
+        triggers_module.add(action, {"type": ctype, "op": op, "value": float(value)})
+        kind = "feels-like" if feels_like else "temperature"
+        return f"Done, Sir. I'll remind you to {action} when {kind} is {op} {value}\u00b0C."
+
+    @tool
+    def list_triggers() -> str:
+        """List all active conditional triggers (weather/temperature). Use when user asks
+        'what triggers do I have', 'what are my conditions'."""
+        if triggers_module is None:
+            return "Sir, the trigger system is offline."
+        return triggers_module.describe_active()
+
+    @tool
+    def remove_trigger(action_substring: str) -> str:
+        """Remove conditional trigger(s) matching the given text. Use when user says
+        'cancel the umbrella trigger', 'remove the rain reminder'."""
+        if triggers_module is None:
+            return "Sir, the trigger system is offline."
+        n = triggers_module.remove_by_action(action_substring)
+        if n:
+            return f"Removed {n} trigger(s), Sir."
+        return f"Sir, I found no trigger matching '{action_substring}'."
 
     # ------------------------------------------------------------------ #
     #  Логування дня                                                       #
@@ -713,6 +764,7 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         open_app, search_web, take_screenshot, lock_screen,
         remember_person, recall_person, introduce_person,
         get_time, set_timer, set_reminder,
+        add_weather_trigger, add_temperature_trigger, list_triggers, remove_trigger,
         summarize_day,
         check_email, send_email,
         check_calendar, add_calendar_event,
@@ -729,7 +781,7 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
 
 
 class JarvisAgent:
-    def __init__(self, music_module, nav_module, sensors_module, reminder_module=None):
+    def __init__(self, music_module, nav_module, sensors_module, reminder_module=None, triggers_module=None):
         self.models = [
             "meta-llama/llama-4-scout-17b-16e-instruct",  # основна
             "llama-3.3-70b-versatile",                    # fallback 1
@@ -743,7 +795,10 @@ class JarvisAgent:
 
         self.music_module = music_module
         self.reminder_module = reminder_module
-        self.tools = create_tools(music_module, nav_module, sensors_module, self.llm_normalize, reminder_module)
+        self.triggers_module = triggers_module
+        self.tools = create_tools(music_module, nav_module, sensors_module, self.llm_normalize, reminder_module, triggers_module)
+        self._nav_module = nav_module
+        self._sensors_module = sensors_module
         self.tools_map = {t.name: t for t in self.tools}
         self.llm_with_tools = self.llm.bind_tools(self.tools)
         self.chat_history = load_history()
@@ -766,6 +821,18 @@ class JarvisAgent:
         """Перемикає характер: 'jarvis' або 'ultron'."""
         self.active_mode = mode.lower()
         print(f"[AGENT] Особистість: {self.active_mode.upper()}")
+
+    def attach_triggers(self, triggers_module):
+        """Пізнє підключення модуля умовних тригерів (потребує weather_alert,
+        який створюється після Brain). Перебудовує набір тулів."""
+        self.triggers_module = triggers_module
+        self.tools = create_tools(
+            self.music_module, self._nav_module, self._sensors_module,
+            self.llm_normalize, self.reminder_module, triggers_module
+        )
+        self.tools_map = {t.name: t for t in self.tools}
+        self.llm_with_tools = self.llm.bind_tools(self.tools)
+        print("[AGENT] Тригери підключено, тули оновлено")
 
     def _create_llm(self, model: str, max_tokens: int = 80):
         if model == "gemini":

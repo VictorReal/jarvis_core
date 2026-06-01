@@ -5,7 +5,7 @@ from modules.navigation_module import NavigationModule
 from modules.sensors_module import SensorsModule
 
 class Brain:
-    def __init__(self, reminder_module=None):
+    def __init__(self, reminder_module=None, triggers_module=None):
         self.memory = Memory()
         self.music_module = MusicModule()
         self.nav_module = NavigationModule()
@@ -33,10 +33,15 @@ class Brain:
             nav_module=self.nav_module,
             sensors_module=self.sensors,
             reminder_module=reminder_module,
+            triggers_module=triggers_module,
         )
 
         # MorningBriefing — ініціалізуємо тут, запускаємо з main після tts готовий
         self.morning_briefing = None  # буде присвоєно з main.py
+
+    def attach_triggers(self, triggers_module):
+        """Пізнє підключення тригерів (потребують weather_alert). Делегує в agent."""
+        self.agent.attach_triggers(triggers_module)
 
     def process(self, command: str, lang: str = "en") -> str:
         command = command.lower().strip()

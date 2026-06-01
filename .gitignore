@@ -9,3 +9,6 @@ data/chat_history.jsoncredentials.json
 token.json
 data/
 *.csv
+*.md
+*.json
+logs/

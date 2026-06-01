@@ -13,6 +13,7 @@ from modules.hud_module import run_hud, update_hud, add_message, set_hud_command
 from modules.reminder_module import ReminderModule
 from modules.spotify_poller import SpotifyPoller
 from weather_alert import WeatherAlert
+from condition_triggers import ConditionTriggers
 from day_logger import log_exchange
 from morning_briefing import MorningBriefing
 from calendar_notifier import CalendarNotifier
@@ -65,6 +66,16 @@ class Jarvis:
         self.weather_alert.start()
         print("[JARVIS] Weather monitoring запущено")
 
+        # Умовні тригери (погодні/часові) — потребують weather_alert
+        self.triggers = ConditionTriggers(
+            weather_alert=self.weather_alert,
+            reminder_module=self.reminder,
+            tts_callback=lambda text: self.safe_speak(text),
+        )
+        self.brain.attach_triggers(self.triggers)
+        self.triggers.start()
+        print("[JARVIS] Умовні тригери запущено")
+
         # Spotify Poller
         self.spotify_poller = SpotifyPoller(self.brain.music_module, poll_interval=2)
         self.spotify_poller.start()
@@ -90,6 +101,7 @@ class Jarvis:
 
             # Підключаємо Telegram до weather і briefing
             self.weather_alert._telegram = self.telegram.notify_owner
+            self.triggers._telegram = self.telegram.notify_owner
             self.briefing._telegram = self.telegram.notify_owner
 
             # Mood: підключаємо Telegram-доставку (текст + дашборд-фото)

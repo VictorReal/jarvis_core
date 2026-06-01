@@ -1,17 +1,6 @@
 {
   "entries": [
     {
-      "date": "2026-05-23",
-      "facts": [
-        "Sir interacted with JARVIS in multiple short conversations",
-        "Sir mentioned 'Ultron'",
-        "JARVIS quoted a wise saying",
-        "Sir spoke in Ukrainian",
-        "JARVIS understands Ukrainian",
-        "Sir referenced JARVIS's portrayal in the Iron Man movies"
-      ]
-    },
-    {
       "date": "2026-05-25",
       "facts": [
         "Sir prefers relaxing at 23:04",
@@ -53,6 +42,12 @@
         "Assigned personality traits to friends: Andriy (kind, gentle), Sasha (outgoing, adventurous)",
         "Sir interacts with JARVIS frequently throughout the day",
         "Sir requests weather update at 12:47"
+      ]
+    },
+    {
+      "date": "2026-05-31",
+      "facts": [
+        "Sir prefers to be reminded about umbrella in case of rain"
       ]
     }
   ]
