@@ -64,6 +64,11 @@ class ReminderModule:
         self._push_hud()
         self._start_hud_ticker()
         logger.info(f"[REMINDER] Встановлено '{message}' на {fire_at.strftime('%Y-%m-%d %H:%M:%S')} (id={reminder_id})")
+        try:
+            from modules.hud_module import log_activity
+            log_activity(f"Reminder set: {message}", "reminder")
+        except Exception:
+            pass
         return reminder_id
 
     def cancel(self, reminder_id: str) -> bool:
@@ -260,6 +265,11 @@ class ReminderModule:
 
         alert = f"Sir, reminder: {message}"
         logger.info(f"[REMINDER] 🔔 {alert}")
+        try:
+            from modules.hud_module import log_activity
+            log_activity(f"Reminder: {message}", "reminder")
+        except Exception:
+            pass
         self._speak_with_retry(alert)
 
     def _fire_overdue(self, reminder_id: str, message: str, overdue_seconds: int):

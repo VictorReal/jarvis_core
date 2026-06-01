@@ -75,12 +75,12 @@ class WeatherAlert:
         # Наполегливий ретрай: wttr.in на старті часто моргає / повільний,
         # бо одночасно вантажиться багато модулів. Пробуємо кілька разів.
         data = None
-        for attempt in range(3):
+        for attempt in range(6):
             data = self._fetch_data()
             if data:
                 break
             logger.info(f"[WEATHER] Старт: спроба {attempt+1}/6 невдала, повтор за 10с")
-            time.sleep(4)
+            time.sleep(10)
         if not data:
             logger.warning("[WEATHER] Початкова погода недоступна після 6 спроб — "
                            "цикл оновлення спробує далі")
@@ -157,6 +157,11 @@ class WeatherAlert:
         )
         logger.info(f"[WEATHER ALERT] {msg_tg}")
         try:
+            from modules.hud_module import log_activity
+            log_activity(f"Weather: {forecast_desc} {when_label}", "weather")
+        except Exception:
+            pass
+        try:
             self._speak(msg_voice)
         except Exception:
             pass
@@ -225,7 +230,7 @@ class WeatherAlert:
 
         for target in targets:
             try:
-                r = requests.get(f"https://wttr.in/{target}?format=j1&lang=en", timeout=8)
+                r = requests.get(f"https://wttr.in/{target}?format=j1&lang=en", timeout=15)
                 if r.status_code != 200:
                     logger.info(f"[WEATHER] wttr.in статус {r.status_code} для {target}")
                     continue

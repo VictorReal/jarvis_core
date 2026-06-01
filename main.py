@@ -9,11 +9,10 @@ from pyngrok import ngrok
 
 from modules.voice_module import speak, _voice, set_voice_personality
 from modules.speech_module import start_home_conversation, start_ironman_conversation, set_lang_mode
-from modules.hud_module import run_hud, update_hud, add_message, set_hud_command_callback
+from modules.hud_module import run_hud, update_hud, add_message, set_hud_command_callback, set_music_action_callback, set_youtube_search_callback
 from modules.reminder_module import ReminderModule
 from modules.spotify_poller import SpotifyPoller
 from weather_alert import WeatherAlert
-from condition_triggers import ConditionTriggers
 from day_logger import log_exchange
 from morning_briefing import MorningBriefing
 from calendar_notifier import CalendarNotifier
@@ -61,20 +60,23 @@ class Jarvis:
 
         # Підключаємо обробник команд з браузера (клік на кульку)
         set_hud_command_callback(lambda text: self.handle_command(text))
+        set_music_action_callback(self._handle_music_action)
+
+        # YouTube — пошук з HUD-поля + голосовий тул
+        try:
+            from modules.youtube_module import YouTubeModule
+            self.youtube = YouTubeModule()
+            self.brain.agent.youtube_module = self.youtube
+            # перебудовуємо тули агента, щоб search_youtube побачив модуль
+            self.brain.agent.attach_triggers(self.brain.agent.triggers_module)
+            set_youtube_search_callback(lambda q: self.youtube.search(q, max_results=5))
+            print(f"[JARVIS] YouTube {'готовий' if self.youtube.available() else 'без ключа (.env)'}")
+        except Exception as e:
+            print(f"[JARVIS] YouTube недоступний: {e}")
 
         # Weather alert — окремо після HUD
         self.weather_alert.start()
         print("[JARVIS] Weather monitoring запущено")
-
-        # Умовні тригери (погодні/часові) — потребують weather_alert
-        self.triggers = ConditionTriggers(
-            weather_alert=self.weather_alert,
-            reminder_module=self.reminder,
-            tts_callback=lambda text: self.safe_speak(text),
-        )
-        self.brain.attach_triggers(self.triggers)
-        self.triggers.start()
-        print("[JARVIS] Умовні тригери запущено")
 
         # Spotify Poller
         self.spotify_poller = SpotifyPoller(self.brain.music_module, poll_interval=2)
@@ -101,7 +103,6 @@ class Jarvis:
 
             # Підключаємо Telegram до weather і briefing
             self.weather_alert._telegram = self.telegram.notify_owner
-            self.triggers._telegram = self.telegram.notify_owner
             self.briefing._telegram = self.telegram.notify_owner
 
             # Mood: підключаємо Telegram-доставку (текст + дашборд-фото)
@@ -223,6 +224,34 @@ class Jarvis:
                 self.telegram.notify_owner("🌙 JARVIS sleep mode activated.")
             except Exception:
                 pass
+
+    def _handle_music_action(self, action, value=None):
+        """Прямі дії плеєра з HUD (без LLM)."""
+        mm = self.brain.music_module
+        try:
+            if action == "toggle":
+                mm.toggle()
+            elif action in ("play", "resume"):
+                mm.resume()
+            elif action in ("pause", "stop"):
+                mm.pause()
+            elif action == "next":
+                mm.next_track()
+            elif action == "prev":
+                mm.previous_track()
+            elif action == "volume" and value is not None:
+                mm.set_volume(int(value))
+            print(f"[HUD MUSIC] {action} {value if value is not None else ''}")
+            try:
+                from modules.hud_module import log_activity
+                labels = {"toggle":"Playback toggled","next":"Skipped to next track",
+                          "prev":"Previous track","pause":"Music paused","resume":"Music resumed",
+                          "volume":f"Volume set to {value}%"}
+                log_activity(labels.get(action, f"Music: {action}"), "music")
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[HUD MUSIC] помилка {action}: {e}")
 
     def handle_command(self, text: str, lang: str = "en"):
         update_hud("status", "THINKING")

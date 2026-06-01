@@ -81,6 +81,11 @@ class ConditionTriggers:
             }
         self._save_to_disk()
         logger.info(f"[TRIGGER] Додано {tid}: {condition} → '{action}'")
+        try:
+            from modules.hud_module import log_activity
+            log_activity(f"Trigger set: {self._condition_text(condition)}", "trigger")
+        except Exception:
+            pass
         return tid
 
     def remove(self, tid: str) -> bool:
@@ -256,6 +261,13 @@ class ConditionTriggers:
         tg = f"\u26a1 Trigger fired: {cond_text}\n\u2192 {action}"
 
         logger.info(f"[TRIGGER] 🔔 {tg}")
+
+        # HUD activity-журнал
+        try:
+            from modules.hud_module import log_activity
+            log_activity(f"Trigger fired: {action}", "trigger")
+        except Exception:
+            pass
 
         # 1) озвучка
         try:

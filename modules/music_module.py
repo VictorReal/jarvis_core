@@ -116,3 +116,72 @@ class MusicModule:
             return "As you wish, Sir. Silence restored."
         except Exception:
             return "The audio streams are already silent, Sir."
+
+    def _active_device_id(self):
+        """Повертає id активного (або першого доступного) пристрою, або None."""
+        try:
+            devices = self.sp.devices().get("devices", [])
+            if not devices:
+                return None
+            active = [d for d in devices if d.get("is_active")]
+            return (active[0] if active else devices[0])["id"]
+        except Exception:
+            return None
+
+    def pause(self):
+        """Пауза (для HUD-кнопки)."""
+        try:
+            did = self._active_device_id()
+            self.sp.pause_playback(device_id=did)
+            return "PAUSED|Silence restored"
+        except Exception:
+            return "The audio streams are already silent, Sir."
+
+    def resume(self):
+        """Відновити відтворення на активному пристрої."""
+        did = self._active_device_id()
+        if not did:
+            return "ERROR|No active Spotify device. Open Spotify and play something first."
+        try:
+            self.sp.start_playback(device_id=did)
+            return "RESUMING|Music"
+        except Exception as e:
+            es = str(e)
+            if "403" in es or "Restriction" in es:
+                return ("ERROR|Nothing to resume. Spotify needs an active track first "
+                        "(press play once in the app), Sir.")
+            if "404" in es:
+                return "ERROR|No active playback session."
+            return f"ERROR|{e}"
+
+    def is_playing(self) -> bool:
+        """Чи грає зараз музика."""
+        try:
+            pb = self.sp.current_playback()
+            return bool(pb and pb.get("is_playing"))
+        except Exception:
+            return False
+
+    def toggle(self):
+        """Перемикає play/pause залежно від поточного стану."""
+        if self.is_playing():
+            return self.pause()
+        return self.resume()
+
+    def next_track(self):
+        """Наступний трек."""
+        try:
+            did = self._active_device_id()
+            self.sp.next_track(device_id=did)
+            return "NEXT|Skipped to next track"
+        except Exception as e:
+            return f"ERROR|{e}"
+
+    def previous_track(self):
+        """Попередній трек."""
+        try:
+            did = self._active_device_id()
+            self.sp.previous_track(device_id=did)
+            return "PREV|Back to previous track"
+        except Exception as e:
+            return f"ERROR|{e}"

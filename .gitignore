@@ -12,3 +12,4 @@ data/
 *.md
 *.json
 logs/
+.cache

@@ -1,73 +1,69 @@
 """
-youtube_module.py — YouTube Data API для JARVIS
-Шукає відео, повертає назву, канал, тривалість, посилання
+youtube_module.py — пошук відео через YouTube Data API v3 для JARVIS.
+
+Потрібен безкоштовний ключ у .env:
+    YOUTUBE_API_KEY=...
+(console.cloud.google.com → YouTube Data API v3 → Enable → Credentials → API key)
+
+Квота: ~10000 одиниць/день, пошук ≈ 100 одиниць → ~100 пошуків/день.
 """
 
 import os
 import logging
-import webbrowser
-from googleapiclient.discovery import build
+import requests
 
 logger = logging.getLogger(__name__)
+
+SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 
 
 class YouTubeModule:
     def __init__(self):
-        api_key = os.getenv("YOUTUBE_API_KEY")
-        if not api_key:
-            raise ValueError("YOUTUBE_API_KEY не задано в .env")
-        self._service = build("youtube", "v3", developerKey=api_key)
+        self._key = os.getenv("YOUTUBE_API_KEY")
 
-    def search(self, query: str, max_results: int = 3) -> list[dict]:
+    def available(self) -> bool:
+        return bool(self._key)
+
+    def search(self, query: str, max_results: int = 5) -> dict:
         """
-        Шукає відео по запиту.
-        Повертає список {title, channel, video_id, url}
+        Шукає відео. Повертає dict:
+          {"ok": True, "items": [{videoId, title, channel, thumbnail}], "query": ...}
+          {"ok": False, "error": "..."}
         """
+        if not self._key:
+            return {"ok": False, "error": "YOUTUBE_API_KEY not set in .env"}
+        if not query or not query.strip():
+            return {"ok": False, "error": "Empty query"}
+
         try:
-            response = self._service.search().list(
-                q=query,
-                part="snippet",
-                maxResults=max_results,
-                type="video",
-                relevanceLanguage="en",
-            ).execute()
-
-            results = []
-            for item in response.get("items", []):
-                vid_id = item["id"]["videoId"]
-                snippet = item["snippet"]
-                results.append({
-                    "title":   snippet.get("title", ""),
-                    "channel": snippet.get("channelTitle", ""),
-                    "video_id": vid_id,
-                    "url":     "https://www.youtube.com/watch?v=" + vid_id,
+            params = {
+                "part": "snippet",
+                "q": query.strip(),
+                "type": "video",
+                "maxResults": max(1, min(int(max_results), 10)),
+                "key": self._key,
+            }
+            r = requests.get(SEARCH_URL, params=params, timeout=10)
+            if r.status_code == 403:
+                return {"ok": False, "error": "API quota exceeded or key invalid"}
+            if r.status_code != 200:
+                return {"ok": False, "error": f"YouTube API status {r.status_code}"}
+            data = r.json()
+            items = []
+            for it in data.get("items", []):
+                vid = it.get("id", {}).get("videoId")
+                sn = it.get("snippet", {})
+                if not vid:
+                    continue
+                thumbs = sn.get("thumbnails", {})
+                thumb = (thumbs.get("medium") or thumbs.get("default") or {}).get("url", "")
+                items.append({
+                    "videoId": vid,
+                    "title": sn.get("title", ""),
+                    "channel": sn.get("channelTitle", ""),
+                    "thumbnail": thumb,
                 })
-            return results
-
+            return {"ok": True, "items": items, "query": query.strip()}
         except Exception as e:
-            logger.error(f"[YOUTUBE] search error: {e}")
-            return []
-
-    def search_and_open(self, query: str) -> str:
-        """Шукає і відкриває перше відео в браузері."""
-        results = self.search(query, max_results=1)
-        if not results:
-            return f"Sir, I couldn't find any videos for '{query}'."
-
-        video = results[0]
-        webbrowser.open(video["url"])
-        logger.info(f"[YOUTUBE] Відкрито: {video['title']}")
-        return (
-            f"Opening '{video['title']}' by {video['channel']}, Sir."
-        )
-
-    def search_summary(self, query: str) -> str:
-        """Повертає список знайдених відео для Джарвіса."""
-        results = self.search(query, max_results=3)
-        if not results:
-            return f"Sir, no videos found for '{query}'."
-
-        lines = [f"Top results for '{query}', Sir:"]
-        for i, v in enumerate(results, 1):
-            lines.append(f"{i}. '{v['title']}' by {v['channel']} — {v['url']}")
-        return " ".join(lines)
+            logger.warning(f"[YOUTUBE] search error: {e}")
+            return {"ok": False, "error": str(e)}

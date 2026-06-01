@@ -59,7 +59,7 @@ NORMALIZE_PROMPT = (
 )
 
 
-def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=None, triggers_module=None):
+def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=None, triggers_module=None, youtube_module=None):
 
     def normalize_query(query: str) -> str:
         response = llm.invoke([
@@ -299,7 +299,10 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
 
     @tool
     def set_reminder(message: str, minutes: float = 0, when: str = "") -> str:
-        """Set a voiced reminder. Use when user says remind me to X.
+        """Set a voiced reminder. ALWAYS call this tool whenever the user says 'remind me to X',
+        'set a reminder', or similar — even if a similar reminder may already exist. Do NOT decide
+        on your own that a reminder is a duplicate and skip calling; the user can have multiple
+        reminders. Never reply 'you already have that reminder' without calling this tool first.
         message: what to remind about.
         minutes: how many minutes from now (for 'in 5 minutes', 'in 2 hours').
         when: natural language like 'tomorrow at 9am', 'next monday 14:00', 'in 3 days' (for absolute dates).
@@ -372,6 +375,28 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         triggers_module.add(action, {"type": ctype, "op": op, "value": float(value)})
         kind = "feels-like" if feels_like else "temperature"
         return f"Done, Sir. I'll remind you to {action} when {kind} is {op} {value}\u00b0C."
+
+    @tool
+    def search_youtube(query: str) -> str:
+        """Search YouTube and show results in the HUD. Use when the user says
+        'play X on YouTube', 'find X on YouTube', 'search YouTube for X'.
+        query: what to search for."""
+        if youtube_module is None or not youtube_module.available():
+            return "Sir, YouTube search is not configured. Add YOUTUBE_API_KEY to .env."
+        res = youtube_module.search(query, max_results=5)
+        if not res.get("ok"):
+            return f"Sir, YouTube search failed: {res.get('error', 'unknown')}."
+        # пушимо результати в HUD
+        try:
+            from modules.hud_module import push_youtube_results
+            push_youtube_results(res)
+        except Exception:
+            pass
+        items = res.get("items", [])
+        if not items:
+            return f"Sir, I found nothing for '{query}'."
+        top = items[0]
+        return f"Found {len(items)} results for '{query}', Sir. Top: {top['title']} by {top['channel']}. Showing them on the display."
 
     @tool
     def list_triggers() -> str:
@@ -519,24 +544,6 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
     # ------------------------------------------------------------------ #
     #  YouTube                                                             #
     # ------------------------------------------------------------------ #
-
-    @tool
-    def open_youtube(query: str) -> str:
-        """Search YouTube and open the top result in browser. Use when user says find video, watch, play on youtube, show me."""
-        try:
-            from modules.youtube_module import YouTubeModule
-            return YouTubeModule().search_and_open(query)
-        except Exception as e:
-            return f"Sir, YouTube is unavailable: {e}"
-
-    @tool
-    def search_youtube(query: str) -> str:
-        """Search YouTube and open the top result. Use when user says search youtube, find video, or asks about videos on a topic."""
-        try:
-            from modules.youtube_module import YouTubeModule
-            return YouTubeModule().search_and_open(query)
-        except Exception as e:
-            return f"Sir, YouTube search failed: {e}"
 
     # ------------------------------------------------------------------ #
     #  API Guard                                                           #
@@ -765,11 +772,11 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         remember_person, recall_person, introduce_person,
         get_time, set_timer, set_reminder,
         add_weather_trigger, add_temperature_trigger, list_triggers, remove_trigger,
+        search_youtube,
         summarize_day,
         check_email, send_email,
         check_calendar, add_calendar_event,
         find_contact,
-        open_youtube, search_youtube,
         analyze_screenshot, read_text_from_screenshot,
         api_usage_status,
         find_drive_file, open_drive_file,
@@ -781,7 +788,7 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
 
 
 class JarvisAgent:
-    def __init__(self, music_module, nav_module, sensors_module, reminder_module=None, triggers_module=None):
+    def __init__(self, music_module, nav_module, sensors_module, reminder_module=None, triggers_module=None, youtube_module=None):
         self.models = [
             "meta-llama/llama-4-scout-17b-16e-instruct",  # основна
             "llama-3.3-70b-versatile",                    # fallback 1
@@ -796,7 +803,8 @@ class JarvisAgent:
         self.music_module = music_module
         self.reminder_module = reminder_module
         self.triggers_module = triggers_module
-        self.tools = create_tools(music_module, nav_module, sensors_module, self.llm_normalize, reminder_module, triggers_module)
+        self.youtube_module = youtube_module
+        self.tools = create_tools(music_module, nav_module, sensors_module, self.llm_normalize, reminder_module, triggers_module, youtube_module)
         self._nav_module = nav_module
         self._sensors_module = sensors_module
         self.tools_map = {t.name: t for t in self.tools}
@@ -828,7 +836,7 @@ class JarvisAgent:
         self.triggers_module = triggers_module
         self.tools = create_tools(
             self.music_module, self._nav_module, self._sensors_module,
-            self.llm_normalize, self.reminder_module, triggers_module
+            self.llm_normalize, self.reminder_module, triggers_module, self.youtube_module
         )
         self.tools_map = {t.name: t for t in self.tools}
         self.llm_with_tools = self.llm.bind_tools(self.tools)
