@@ -138,8 +138,17 @@ class MusicModule:
             return "The audio streams are already silent, Sir."
 
     def resume(self):
-        """Відновити відтворення на активному пристрої."""
+        """Відновити відтворення. Якщо Spotify закритий — спершу запускаємо."""
         did = self._active_device_id()
+        if not did:
+            # Spotify може бути закритий — пробуємо запустити і чекаємо пристрій
+            self._ensure_spotify_is_running()
+            import time as _t
+            for _ in range(6):
+                _t.sleep(1)
+                did = self._active_device_id()
+                if did:
+                    break
         if not did:
             return "ERROR|No active Spotify device. Open Spotify and play something first."
         try:
@@ -183,5 +192,47 @@ class MusicModule:
             did = self._active_device_id()
             self.sp.previous_track(device_id=did)
             return "PREV|Back to previous track"
+        except Exception as e:
+            return f"ERROR|{e}"
+
+    def _current_volume(self):
+        """Поточна гучність (0-100) або None."""
+        try:
+            pb = self.sp.current_playback()
+            if pb and pb.get("device"):
+                return pb["device"].get("volume_percent")
+        except Exception:
+            pass
+        return None
+
+    def toggle_mute(self):
+        """Mute/unmute: 0 ↔ попередня гучність."""
+        try:
+            cur = self._current_volume()
+            did = self._active_device_id()
+            if cur is None:
+                return "ERROR|No device"
+            if cur > 0:
+                self._muted_volume = cur          # запам'ятали
+                self.sp.volume(0, device_id=did)
+                return "MUTED|0"
+            else:
+                restore = getattr(self, "_muted_volume", 30) or 30
+                self.sp.volume(restore, device_id=did)
+                return f"UNMUTED|{restore}"
+        except Exception as e:
+            return f"ERROR|{e}"
+
+    def seek(self, position_percent: float):
+        """Перемотати на позицію (0-100% від тривалості треку)."""
+        try:
+            pb = self.sp.current_playback()
+            if not pb or not pb.get("item"):
+                return "ERROR|Nothing playing"
+            dur_ms = pb["item"]["duration_ms"]
+            target = int(dur_ms * max(0, min(100, position_percent)) / 100)
+            did = self._active_device_id()
+            self.sp.seek_track(target, device_id=did)
+            return f"SEEK|{position_percent}%"
         except Exception as e:
             return f"ERROR|{e}"

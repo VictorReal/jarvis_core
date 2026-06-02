@@ -27,6 +27,7 @@ hud_state = {
     "model": "llama-3.3-70b",
     "next_event": None,
     "activity": [],
+    "ticker": {"finance": [], "news": []},
 }
 
 HTML_TEMPLATE = """
@@ -146,19 +147,6 @@ HTML_TEMPLATE = """
       </div>
     
 <!-- MONEY MODAL -->
-<div id="yt-modal" class="health-modal">
-  <div class="health-modal-inner" style="max-width:900px">
-    <div class="health-modal-header">
-      <div class="health-modal-title">◈ YOUTUBE</div>
-      <button class="health-modal-close" onclick="ytCloseModal()">CLOSE [ESC]</button>
-    </div>
-    <div class="yt-modal-player">
-      <iframe id="yt-modal-frame" width="100%" height="480" frameborder="0"
-              allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-    </div>
-  </div>
-</div>
-
 <div id="money-modal" class="health-modal">
   <div class="health-modal-inner">
     <div class="health-modal-header">
@@ -444,57 +432,67 @@ HTML_TEMPLATE = """
       <div class="audio-row">
         <div class="music-controls">
           <button class="music-btn" id="btn-prev" title="Previous" onclick="musicAction('prev')">⏮</button>
-          <button class="music-btn music-btn-main" id="btn-toggle" title="Play / Pause" onclick="musicAction('toggle')">▶</button>
+          <button class="music-btn music-btn-main" id="btn-toggle" title="Play / Pause" onclick="musicAction('toggle')">&#x25B6;&#xFE0E;</button>
           <button class="music-btn" id="btn-next" title="Next" onclick="musicAction('next')">⏭</button>
         </div>
         <div class="vol-inline">
-          <span class="vol-icon">🔊</span>
+          <span class="vol-icon" id="vol-icon" onclick="musicAction('mute')" title="Mute / Unmute" style="cursor:pointer">🔊</span>
           <div class="volume-bar" id="vol-bar-track" title="Click to set volume">
             <div class="volume-fill" id="vol-bar" style="width:0%"></div>
           </div>
         </div>
       </div>
 
-      <div class="volume-bar progress-slim">
+      <!-- прогрес-бар треку (клікабельний для seek) -->
+      <div class="volume-bar progress-slim" id="progress-track" title="Click to seek">
         <div class="progress-fill" id="progress-bar" style="width:0%"></div>
       </div>
-      <div class="track-times">
-        <span class="track-time" id="progress-time">0:00</span>
-        <span class="track-time" id="duration-time">0:00</span>
+      <!-- час прихований для компактності, лишений для JS -->
+      <div style="display:none">
+        <span id="progress-time">0:00</span>
+        <span id="duration-time">0:00</span>
       </div>
       <!-- play-icon прихований, лишений для сумісності зі станом -->
       <span id="play-icon" style="display:none">—</span>
     </div>
 
     <!-- YouTube — між Audio і Reminders -->
-    <div class="yt-block" style="margin-top:8px;padding-top:6px;border-top:1px solid var(--hud-accent-trace);">
+    <div class="yt-block sec-divider">
       <div class="panel-title">◈ YouTube</div>
-      <div class="yt-search-row">
+      <div class="yt-search-row" id="yt-search-row">
         <input type="text" id="yt-input" class="yt-input" placeholder="Search YouTube…"
                onkeydown="if(event.key==='Enter')ytSearch()">
         <button class="yt-btn" onclick="ytSearch()" title="Search">⌕</button>
       </div>
-      <div class="yt-results" id="yt-results"></div>
-      <div class="yt-mini" id="yt-mini" style="display:none">
-        <iframe id="yt-mini-frame" width="100%" height="120" frameborder="0"
-                allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-        <button class="yt-expand-btn" onclick="ytExpand()" title="Expand">⤢ Expand</button>
+      <button class="yt-back-btn" id="yt-back-btn" onclick="ytBack()" style="display:none" title="Back to search">‹ Search</button>
+      <div class="yt-body">
+        <div class="yt-results" id="yt-results"></div>
+        <div class="yt-mini" id="yt-mini" style="display:none">
+          <div id="yt-mini-frame"></div>
+        </div>
       </div>
     </div>
 
     <!-- Об'єднане вікно: Reminders ⇄ Next Event (перемикач) -->
-    <div class="switch-block" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--hud-accent-faint);">
+    <div class="switch-block sec-divider faint">
       <div class="switch-head">
-        <span class="panel-title" id="switch-title" style="margin:0">◈ Active Reminders</span>
-        <button class="switch-btn" id="switch-btn" onclick="toggleReminderEvent()" title="Switch">⇄</button>
+        <span class="panel-title" id="switch-title" style="margin:0">◈ Activity Log</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="switch-btn" id="activity-expand-btn" onclick="openActivityOverlay()" title="Expand log">⤢</button>
+          <button class="switch-btn" id="switch-btn" onclick="cycleSwitchView()" title="Switch">⇄</button>
+        </div>
       </div>
-      <!-- Reminders view (default) -->
-      <div id="view-reminders">
+      <!-- Activity Log view (default) -->
+      <div id="view-activity">
+        <div class="log-list log-list-compact" id="log-list"></div>
+      </div>
+      <!-- Reminders view -->
+      <div id="view-reminders" style="display:none">
         <div class="reminders-list" id="reminders-list">
           <div style="font-size:11px;color:#00d4ff33">No active reminders</div>
         </div>
       </div>
-      <!-- Next Event view (hidden by default) -->
+      <!-- Next Event view -->
       <div id="view-event" style="display:none">
         <div id="next-event-block">
           <div id="next-event-title" style="font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">—</div>
@@ -504,12 +502,6 @@ HTML_TEMPLATE = """
       </div>
     </div>
 
-    <!-- Activity Log — у кінці лівої колонки, клік на заголовок → оверлей -->
-    <div class="activity-block" style="margin-top:6px;">
-      <div class="panel-title activity-head" onclick="openActivityOverlay()" title="Click to expand">◈ Activity Log <span class="activity-expand">⤢</span></div>
-      <div class="log-list log-list-compact" id="log-list"></div>
-    </div>
-
     <!-- Activity overlay — на всю ліву колонку -->
     <div class="activity-overlay" id="activity-overlay">
       <div class="activity-overlay-head">
@@ -517,6 +509,16 @@ HTML_TEMPLATE = """
         <button class="activity-close" onclick="closeActivityOverlay()">CLOSE ✕</button>
       </div>
       <div class="activity-overlay-list" id="activity-overlay-list"></div>
+    </div>
+
+    <!-- Бігуча стрічка — прикріплена знизу колонки -->
+    <div class="ticker-wrap">
+      <div class="ticker-row ticker-news" id="ticker-news-row">
+        <div class="ticker-track" id="ticker-news">Loading news…</div>
+      </div>
+      <div class="ticker-row ticker-fin" id="ticker-fin-row">
+        <div class="ticker-track" id="ticker-fin">Loading markets…</div>
+      </div>
     </div>
   </div>
 
@@ -532,7 +534,7 @@ HTML_TEMPLATE = """
     <div class="weather-block">
       <div class="weather-text" id="weather">Loading weather...</div>
     </div>
-    <div class="panel-title" style="margin-top:8px">◈ Health</div>
+    <div class="panel-title sec-gap">◈ Health</div>
     <div class="health-mini" onclick="openHealthModal()" id="health-mini">
       <div class="health-mini-title">
         <span>❤️ TODAY</span>
@@ -557,7 +559,7 @@ HTML_TEMPLATE = """
       </div>
     </div>
 
-    <div class="panel-title" style="margin-top:8px">◈ Finance</div>
+    <div class="panel-title sec-gap">◈ Finance</div>
     <div class="health-mini" onclick="openMoneyModal()" id="money-mini">
       <div class="health-mini-title">
         <span>💰 THIS MONTH</span>
@@ -582,7 +584,7 @@ HTML_TEMPLATE = """
       </div>
     </div>
 
-    <div class="panel-title" style="margin-top:8px">◈ Mood</div>
+    <div class="panel-title sec-gap">◈ Mood</div>
     <div class="health-mini" onclick="openMoodModal()" id="mood-mini">
       <div class="health-mini-title">
         <span>🧠 TODAY</span>
@@ -607,7 +609,7 @@ HTML_TEMPLATE = """
       </div>
     </div>
 
-    <div class="panel-title" style="margin-top:8px">◈ Known Individuals</div>
+    <div class="panel-title sec-gap">◈ Known Individuals</div>
     <div class="people-mini" onclick="openPeopleModal()" id="people-mini">
       <div class="people-mini-header">
         <span class="people-mini-count">👥 <span class="num" id="pm-count">0</span> RECORDED</span>
@@ -717,6 +719,7 @@ def on_connect():
         'reminders':      hud_state.get('reminders', []),
         'people':         people,
         'activity':       hud_state.get('activity', []),
+        'ticker':         hud_state.get('ticker', {'finance': [], 'news': []}),
     })
 
 
@@ -791,10 +794,24 @@ def push_youtube_results(res: dict):
     socketio.emit('youtube_results', res)
 
 
+@socketio.on('youtube_started')
+def on_youtube_started(data):
+    """HUD почав грати відео → ставимо музику на паузу (взаємна пауза)."""
+    if _music_action_callback:
+        import threading
+        threading.Thread(target=_music_action_callback, args=("pause_for_youtube", None), daemon=True).start()
+
+
 def update_hud(key: str, value):
     """Оновлює одне поле HUD і надсилає всім клієнтам."""
     hud_state[key] = value
     socketio.emit('state_update', {key: value})
+
+
+def update_ticker(data: dict):
+    """Оновлює бігучу стрічку (фінанси + новини). Зберігає для нових клієнтів."""
+    hud_state["ticker"] = data
+    socketio.emit('state_update', {'ticker': data})
 
 
 def update_reminders(reminders: list):

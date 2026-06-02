@@ -78,6 +78,15 @@ class Jarvis:
         self.weather_alert.start()
         print("[JARVIS] Weather monitoring запущено")
 
+        # Бігуча стрічка — новини, курси, крипта, акції
+        try:
+            from modules.ticker_module import TickerModule
+            self.ticker = TickerModule()
+            self.ticker.start()
+            print("[JARVIS] Стрічка запущена")
+        except Exception as e:
+            print(f"[JARVIS] Стрічка недоступна: {e}")
+
         # Spotify Poller
         self.spotify_poller = SpotifyPoller(self.brain.music_module, poll_interval=2)
         self.spotify_poller.start()
@@ -241,6 +250,19 @@ class Jarvis:
                 mm.previous_track()
             elif action == "volume" and value is not None:
                 mm.set_volume(int(value))
+            elif action == "mute":
+                mm.toggle_mute()
+            elif action == "seek" and value is not None:
+                mm.seek(float(value))
+            elif action == "pause_for_youtube":
+                mm.pause()   # YouTube попросив тишу — НЕ шлемо stop_youtube назад
+            # старт/відновлення музики — зупиняємо YouTube у HUD (взаємна пауза)
+            if action in ("toggle", "play", "resume", "next", "prev"):
+                try:
+                    from modules.hud_module import socketio
+                    socketio.emit('stop_youtube', {})
+                except Exception:
+                    pass
             print(f"[HUD MUSIC] {action} {value if value is not None else ''}")
             try:
                 from modules.hud_module import log_activity

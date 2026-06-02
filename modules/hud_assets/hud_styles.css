@@ -164,7 +164,7 @@
   }
 
   /* LEFT PANEL */
-  .left-panel { grid-row: 2; grid-column: 1; }
+  .left-panel { grid-row: 2; grid-column: 1; padding: 16px 16px 0px; }
 
   .sys-item { margin-bottom: 10px; }
 
@@ -192,16 +192,13 @@
   }
 
   .sys-value {
-    font-size: 18px;
+    font-size: 15px;
     font-weight: 700;
     color: var(--hud-accent);
     font-family: 'Orbitron', sans-serif;
   }
 
   .music-info {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--hud-accent-faint);
     max-height: 140px;
     overflow: hidden;
   }
@@ -1128,7 +1125,7 @@ box-shadow: 0 0 10px var(--hud-glow);
 .activity-head { cursor: pointer; display: flex; align-items: center; justify-content: space-between; transition: color 0.15s; }
 .activity-head:hover { color: var(--hud-accent2); }
 .activity-expand { font-size: 12px; opacity: 0.6; }
-.log-list-compact { max-height: 46px; overflow: hidden; }
+.log-list-compact { max-height: 100%; overflow-y: auto; }
 
 /* Activity overlay — на всю ліву колонку */
 .activity-overlay {
@@ -1173,7 +1170,7 @@ box-shadow: 0 0 10px var(--hud-glow);
 .log-act-text { color: var(--hud-accent-dim); }
 
 /* ════════ System дві колонки + switch-блок ════════ */
-.sys-grid { display: flex; gap: 14px; align-items: flex-start; }
+.sys-grid { display: flex; gap: 9px; align-items: flex-start; }
 .sys-left { flex: 1; min-width: 0; }
 .sys-left .sys-bar { width: 100%; }   /* бар стає коротшим бо колонка вужча */
 .sys-right {
@@ -1183,7 +1180,7 @@ box-shadow: 0 0 10px var(--hud-glow);
 }
 .sys-stat { display: flex; flex-direction: column; }
 .sys-stat-label { font-size: 8px; letter-spacing: 1px; color: var(--hud-accent-dim); }
-.sys-stat-val { font-size: 13px; color: var(--hud-accent); font-family: 'Orbitron', sans-serif; margin-top: 1px; white-space: nowrap; }
+.sys-stat-val { font-size: 12px; color: var(--hud-accent); font-family: 'Orbitron', sans-serif; margin-top: 1px; white-space: nowrap; }
 
 /* switch-блок Reminders ⇄ Next Event */
 .switch-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
@@ -1197,7 +1194,9 @@ box-shadow: 0 0 10px var(--hud-glow);
 /* ════════ Скрол Activity + фіксований switch-блок ════════ */
 /* компактний Activity Log — фіксована висота + скрол */
 .log-list-compact {
-  max-height: 70px;
+  height: 40px;
+  max-height: 40px;
+  min-height: 40px;
   overflow-y: auto;
 }
 .log-list-compact::-webkit-scrollbar { width: 4px; }
@@ -1206,11 +1205,11 @@ box-shadow: 0 0 10px var(--hud-glow);
 .log-list-compact::-webkit-scrollbar-thumb:hover { background: var(--hud-accent); }
 
 /* switch-блок (Reminders/Events) — фіксована висота, скрол усередині */
-#view-reminders, #view-event {
-  height: 30px;
+#view-activity, #view-reminders, #view-event {
+  height: 44px;
   overflow-y: auto;
 }
-#view-reminders::-webkit-scrollbar, #view-event::-webkit-scrollbar { width: 4px; }
+#view-activity::-webkit-scrollbar, #view-reminders::-webkit-scrollbar, #view-event::-webkit-scrollbar { width: 4px; }
 #view-reminders::-webkit-scrollbar-track, #view-event::-webkit-scrollbar-track { background: var(--hud-accent-trace); border-radius: 2px; }
 #view-reminders::-webkit-scrollbar-thumb, #view-event::-webkit-scrollbar-thumb { background: var(--hud-accent-dim); border-radius: 2px; }
 #view-reminders::-webkit-scrollbar-thumb:hover, #view-event::-webkit-scrollbar-thumb:hover { background: var(--hud-accent); }
@@ -1259,3 +1258,98 @@ box-shadow: 0 0 10px var(--hud-glow);
 }
 .yt-expand-btn:hover { background: var(--hud-accent-faint); box-shadow: 0 0 8px var(--hud-glow); }
 .yt-modal-player { padding: 10px 0; }
+
+/* ════════ YouTube фіксована висота + правки музики ════════ */
+.yt-block { height: 178px; display: flex; flex-direction: column; overflow: hidden; }
+.yt-body { flex: 1; min-height: 0; overflow: hidden; }
+.yt-results { max-height: 100%; }
+.yt-back-btn {
+  position: absolute; top: 0; right: 0;
+  background: var(--hud-accent-trace); border: 1px solid var(--hud-accent-faint);
+  color: var(--hud-accent); border-radius: 5px; padding: 2px 7px;
+  font-size: 9px; letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
+}
+.yt-block { position: relative; }
+.yt-back-btn:hover { background: var(--hud-accent-faint); box-shadow: 0 0 8px var(--hud-glow); }
+
+/* прогрес-бар клікабельний */
+#progress-track { cursor: pointer; }
+#progress-track:hover { box-shadow: 0 0 8px var(--hud-glow); }
+
+/* mute-іконка */
+#vol-icon:hover { opacity: 1; text-shadow: 0 0 6px var(--hud-glow); }
+
+/* головна кнопка play/pause — форсуємо колір HUD (прибираємо емодзі-оранжевий на мобільному) */
+.music-btn-main {
+  color: var(--hud-accent2) !important;
+  font-family: 'Share Tech Mono', monospace;
+}
+@media (max-width: 768px) {
+  .music-btn-main { color: var(--hud-accent2) !important; }
+  .music-btn { color: var(--hud-accent) !important; }
+}
+
+/* ════════ Відступи секцій лівої колонки (через класи) ════════ */
+.sec-divider {
+  margin-top: 4px;
+  padding-top: 3px;
+  border-top: 1px solid var(--hud-accent-trace);
+}
+.sec-divider.faint { border-top-color: var(--hud-accent-faint); }
+.left-panel .panel-title.sec-gap { margin-top: 4px; }
+
+/* ════════ YouTube IFrame Player ════════ */
+#yt-mini-frame { width: 100%; height: 135px; border-radius: 4px; overflow: hidden; }
+#yt-mini-frame iframe { width: 100%; height: 100%; border: 0; border-radius: 4px; }
+
+/* ════════ Бігуча стрічка (новини + фінанси) ════════ */
+.ticker-wrap {
+  margin-top: auto;              /* прикріплює стрічку до низу колонки */
+  margin-left: -12px;             /* ширше на бокові відступи панелі */
+  margin-right: -12px;
+  padding-top: 6px;
+  border-top: 1px solid var(--hud-accent-faint);
+}
+.ticker-row {
+  overflow: hidden;
+  white-space: nowrap;
+  position: relative;
+  border-radius: 0px;
+}
+.ticker-track {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+  padding-left: 100%;            /* старт за правим краєм */
+  animation: ticker-scroll linear infinite;
+}
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-100%); }
+}
+/* Новини — зверху, ширша смуга, світліший фон, темніший текст */
+.ticker-news {
+  background: #0d4a5a;                     /* приглушений cyan (не яскравий, не прозорий) */
+  margin-bottom: 3px;
+  padding: 2px 0;                         /* ~15% тонше */
+}
+.ticker-news .ticker-track {
+  color: #d4f4ff;
+  font-size: 11px;
+  font-weight: 600;
+  animation-duration: 175s;
+}
+/* Фінанси — знизу, компактний, темний фон, світлий текст */
+.ticker-fin {
+  background: var(--hud-accent-trace);
+  padding: 2px 0;                         /* третину тонше */
+}
+.ticker-fin .ticker-track {
+  color: var(--hud-accent);
+  font-size: 11px;
+  font-family: 'Orbitron', sans-serif;
+  animation-duration: 45s;
+}
+.ticker-sep { color: var(--hud-accent-dim); margin: 0 6px; }
+.ticker-up { color: #00ff88; }
+.ticker-down { color: #ff5e7e; }

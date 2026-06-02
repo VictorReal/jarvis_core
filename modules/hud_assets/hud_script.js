@@ -70,8 +70,9 @@ function updatePlayIcon(isPlaying, songName) {
     icon.style.color = '#00d4ff';
   }
   // синхронізуємо головну кнопку: показуємо дію, яку зробить клік
+  // \uFE0E — text variation selector: змушує рендерити як гліф, не кольоровий емодзі (мобільний)
   const toggleBtn = document.getElementById('btn-toggle');
-  if (toggleBtn) toggleBtn.textContent = isPlaying ? '⏸' : '▶';
+  if (toggleBtn) toggleBtn.textContent = isPlaying ? '\u23F8\uFE0E' : '\u25B6\uFE0E';
 }
 
 // ── Music controls ────────────────────────────────────────────────────────
@@ -91,6 +92,17 @@ document.addEventListener('DOMContentLoaded', function () {
       pct = Math.max(0, Math.min(100, pct));
       document.getElementById('vol-bar').style.width = pct + '%';
       musicAction('volume', pct);
+    });
+  }
+  // клік по прогрес-бару = перемотка (seek)
+  const ptrack = document.getElementById('progress-track');
+  if (ptrack) {
+    ptrack.addEventListener('click', function (e) {
+      const rect = ptrack.getBoundingClientRect();
+      let pct = ((e.clientX - rect.left) / rect.width) * 100;
+      pct = Math.max(0, Math.min(100, pct));
+      document.getElementById('progress-bar').style.width = pct + '%';
+      musicAction('seek', pct);
     });
   }
 });
@@ -170,14 +182,26 @@ function closeActivityOverlay() {
 }
 
 // ── Перемикач Reminders ⇄ Next Event ──────────────────────────────────────
-var _showingReminders = true;
-function toggleReminderEvent() {
-  _showingReminders = !_showingReminders;
-  document.getElementById('view-reminders').style.display = _showingReminders ? 'block' : 'none';
-  document.getElementById('view-event').style.display = _showingReminders ? 'none' : 'block';
-  document.getElementById('switch-title').textContent =
-    _showingReminders ? '◈ Active Reminders' : '◈ Next Event';
+var _switchViews = [
+  { id: 'view-activity',  title: '◈ Activity Log',     expand: true  },
+  { id: 'view-reminders', title: '◈ Active Reminders', expand: false },
+  { id: 'view-event',     title: '◈ Next Event',       expand: false }
+];
+var _switchIdx = 0;
+function cycleSwitchView() {
+  _switchIdx = (_switchIdx + 1) % _switchViews.length;
+  _switchViews.forEach(function (v, i) {
+    var el = document.getElementById(v.id);
+    if (el) el.style.display = (i === _switchIdx) ? 'block' : 'none';
+  });
+  var cur = _switchViews[_switchIdx];
+  document.getElementById('switch-title').textContent = cur.title;
+  // кнопка розгортання ⤢ — лише для Activity
+  var exp = document.getElementById('activity-expand-btn');
+  if (exp) exp.style.display = cur.expand ? 'block' : 'none';
 }
+// сумісність зі старим викликом (якщо десь лишився)
+function toggleReminderEvent() { cycleSwitchView(); }
 
 // ── YouTube ───────────────────────────────────────────────────────────────
 var _ytCurrentId = null;
@@ -222,28 +246,116 @@ function _esc(s) {
   var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML;
 }
 
+// YouTube IFrame Player API — дозволяє справжню паузу
+var _ytPlayer = null;
+var _ytApiReady = false;
+var _ytPendingId = null;
+
+// callback, який викличе YouTube API коли завантажиться
+function onYouTubeIframeAPIReady() {
+  _ytApiReady = true;
+  if (_ytPendingId) { _ytCreatePlayer(_ytPendingId); _ytPendingId = null; }
+}
+
+function _ytLoadApi() {
+  if (window.YT && window.YT.Player) { _ytApiReady = true; return; }
+  if (document.getElementById('yt-api-script')) return;
+  var tag = document.createElement('script');
+  tag.id = 'yt-api-script';
+  tag.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(tag);
+}
+
+function _ytCreatePlayer(videoId) {
+  _ytPlayer = new YT.Player('yt-mini-frame', {
+    videoId: videoId,
+    playerVars: { autoplay: 1, rel: 0 },
+    events: {
+      // коли користувач сам тисне play у плеєрі — глушимо музику
+      onStateChange: function (e) {
+        if (e.data === YT.PlayerState.PLAYING) {
+          try { socket.emit('youtube_started', {}); } catch (err) {}
+        }
+      }
+    }
+  });
+}
+
 function ytPlay(videoId) {
   _ytCurrentId = videoId;
-  var mini = document.getElementById('yt-mini');
-  var frame = document.getElementById('yt-mini-frame');
-  frame.src = 'https://www.youtube.com/embed/' + videoId + '?autoplay=1';
-  mini.style.display = 'block';
+  document.getElementById('yt-mini').style.display = 'block';
+  document.getElementById('yt-search-row').style.display = 'none';
+  document.getElementById('yt-results').style.display = 'none';
+  document.getElementById('yt-back-btn').style.display = 'block';
+
+  _ytLoadApi();
+  if (_ytApiReady && window.YT && window.YT.Player) {
+    if (_ytPlayer && _ytPlayer.loadVideoById) {
+      _ytPlayer.loadVideoById(videoId);
+    } else {
+      _ytCreatePlayer(videoId);
+    }
+  } else {
+    _ytPendingId = videoId;   // створимо коли API готовий
+  }
+  try { socket.emit('youtube_started', {}); } catch (e) {}
 }
 
-function ytExpand() {
-  if (!_ytCurrentId) return;
-  var frame = document.getElementById('yt-modal-frame');
-  frame.src = 'https://www.youtube.com/embed/' + _ytCurrentId + '?autoplay=1';
-  document.getElementById('yt-modal').classList.add('open');
+function ytPause() {
+  if (_ytPlayer && _ytPlayer.pauseVideo) {
+    try { _ytPlayer.pauseVideo(); } catch (e) {}
+  }
 }
 
-function ytCloseModal() {
-  document.getElementById('yt-modal').classList.remove('open');
-  document.getElementById('yt-modal-frame').src = '';  // стоп відтворення
+function ytBack() {
+  // повертаємо пошук, зупиняємо плеєр повністю
+  if (_ytPlayer && _ytPlayer.stopVideo) { try { _ytPlayer.stopVideo(); } catch (e) {} }
+  document.getElementById('yt-mini').style.display = 'none';
+  document.getElementById('yt-search-row').style.display = 'flex';
+  document.getElementById('yt-results').style.display = 'block';
+  document.getElementById('yt-back-btn').style.display = 'none';
 }
+
+function ytExpand() { /* fullscreen є в самому плеєрі */ }
+function ytCloseModal() { /* модал прибрано */ }
+
+// музика стартувала → СТАВИМО YOUTUBE НА ПАУЗУ (плеєр лишається)
+socket.on('stop_youtube', function () {
+  ytPause();
+});
 
 // результати пошуку (з HUD-поля або від голосового тула)
 socket.on('youtube_results', function (data) { ytRenderResults(data); });
+
+// ── Бігуча стрічка ────────────────────────────────────────────────────────
+function renderTicker(t) {
+  // Новини
+  var newsEl = document.getElementById('ticker-news');
+  if (newsEl && t.news && t.news.length) {
+    var newsText = t.news.join('   ◆   ');
+    // дублюємо двічі для безшовного циклу
+    newsEl.textContent = newsText + '   ◆   ' + newsText;
+  } else if (newsEl && (!t.news || !t.news.length)) {
+    newsEl.textContent = 'News feed offline — add NEWSAPI_KEY';
+  }
+  // Фінанси
+  var finEl = document.getElementById('ticker-fin');
+  if (finEl && t.finance && t.finance.length) {
+    var parts = t.finance.map(function (it) {
+      var s = it.symbol + ' ' + it.value;
+      if (it.change !== undefined && it.change !== 0) {
+        var cls = it.change > 0 ? 'ticker-up' : 'ticker-down';
+        var arrow = it.change > 0 ? '▲' : '▼';
+        s += ' <span class="' + cls + '">' + arrow + Math.abs(it.change) + '%</span>';
+      }
+      return s;
+    });
+    var finText = parts.join('<span class="ticker-sep">|</span>');
+    finEl.innerHTML = finText + '<span class="ticker-sep">|</span>' + finText;
+  } else if (finEl && (!t.finance || !t.finance.length)) {
+    finEl.textContent = 'Markets loading…';
+  }
+}
 
 // ── Socket events ─────────────────────────────────────────────────────────
 socket.on('state_update', (data) => {
@@ -391,6 +503,11 @@ socket.on('state_update', (data) => {
   // Початковий список подій при підключенні
   if (data.activity && Array.isArray(data.activity)) {
     data.activity.forEach(renderActivityEvent);
+  }
+
+  // Бігуча стрічка
+  if (data.ticker) {
+    renderTicker(data.ticker);
   }
 
   // Next Calendar Event
@@ -589,17 +706,13 @@ document.addEventListener('keydown', (e) => {
 if (e.key === 'Escape' && document.getElementById('health-modal').classList.contains('open')) {
 closeHealthModal();
 }
-if (e.key === 'Escape' && document.getElementById('yt-modal').classList.contains('open')) {
-ytCloseModal();
-}
+var _ym2=document.getElementById('yt-modal'); if (e.key === 'Escape' && _ym2 && _ym2.classList.contains('open')) { ytCloseModal(); }
 });
 // Клік повз модал — закрити
 document.getElementById('health-modal').addEventListener('click', (e) => {
 if (e.target.id === 'health-modal') closeHealthModal();
 });
-document.getElementById('yt-modal').addEventListener('click', (e) => {
-if (e.target.id === 'yt-modal') ytCloseModal();
-});
+var _ym3=document.getElementById('yt-modal'); if(_ym3) _ym3.addEventListener('click', (e) => { if (e.target.id === 'yt-modal') ytCloseModal(); });
 // ── MONEY PANEL ───────────────────────────────────────────────────────────
 let currentMoneyPeriod = 'month';
 
