@@ -327,6 +327,49 @@ socket.on('stop_youtube', function () {
 // результати пошуку (з HUD-поля або від голосового тула)
 socket.on('youtube_results', function (data) { ytRenderResults(data); });
 
+// ── WAKE SCENE — «загоряння» HUD ───────────────────────────────────────────
+function playWakeScene() {
+  var flash = document.createElement('div');
+  flash.className = 'wake-flash';
+  document.body.appendChild(flash);
+  setTimeout(function () { if (flash.parentNode) flash.parentNode.removeChild(flash); }, 700);
+
+  var panels = Array.prototype.slice.call(document.querySelectorAll('.panel'));
+  panels.sort(function (a, b) {
+    var ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    return (ra.left - rb.left) || (ra.top - rb.top);
+  });
+  panels.forEach(function (p, i) {
+    setTimeout(function () {
+      p.classList.add('wake-lit');
+      setTimeout(function () { p.classList.remove('wake-lit'); }, 900);
+    }, i * 180);
+  });
+
+  ['ticker-news-row', 'ticker-fin-row'].forEach(function (id, i) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    setTimeout(function () {
+      el.classList.add('wake-pulse');
+      setTimeout(function () { el.classList.remove('wake-pulse'); }, 1200);
+    }, 400 + i * 200);
+  });
+
+  var logo = document.querySelector('.logo');
+  if (logo) {
+    logo.classList.add('wake-logo');
+    setTimeout(function () { logo.classList.remove('wake-logo'); }, 1500);
+  }
+}
+socket.on('wake_scene', function () { playWakeScene(); });
+
+// клік по sleep-overlay = повне прокидання (синхронізує стан на сервері)
+function wakeFromOverlay() {
+  var ov = document.getElementById('sleep-overlay');
+  if (ov) ov.style.display = 'none';
+  try { socket.emit('wake_from_overlay', {}); } catch (e) {}
+}
+
 // ── Бігуча стрічка ────────────────────────────────────────────────────────
 function renderTicker(t) {
   // Новини
@@ -541,8 +584,53 @@ socket.on('state_update', (data) => {
     container.scrollTop = container.scrollHeight;
     while (container.children.length > 50)
       container.removeChild(container.firstChild);
+
+    // Компактний режим: показуємо лише ОСТАННЄ повідомлення JARVIS.
+    if (data.new_message.role === 'jarvis') {
+      markLatestJarvis(div);
+    }
   }
 });
+
+// Позначає останнє JARVIS-повідомлення класом .latest-jarvis (для компактного
+// режиму) + анімація підміни попереднього.
+function markLatestJarvis(newDiv) {
+  const container = document.getElementById('messages');
+  const prev = container.querySelector('.message.latest-jarvis');
+  const section = document.getElementById('comm-section');
+  const collapsed = section && section.classList.contains('collapsed');
+
+  if (prev && prev !== newDiv) {
+    if (collapsed) {
+      // плавно прибираємо попереднє, тоді знімаємо мітку
+      prev.classList.remove('latest-jarvis');
+      prev.classList.add('swapping-out');
+      setTimeout(() => prev.classList.remove('swapping-out'), 320);
+    } else {
+      prev.classList.remove('latest-jarvis');
+    }
+  }
+  newDiv.classList.add('latest-jarvis');
+}
+
+// ── Communication Log: згортання/розгортання (клік на заголовок) ──────────
+function toggleCommLog() {
+  const section = document.getElementById('comm-section');
+  if (!section) return;
+  const willCollapse = !section.classList.contains('collapsed');
+  section.classList.toggle('collapsed');
+
+  // При згортанні переконуємось, що останнє JARVIS-повідомлення позначене
+  if (willCollapse) {
+    const container = document.getElementById('messages');
+    if (container && !container.querySelector('.message.latest-jarvis')) {
+      const jarvisMsgs = container.querySelectorAll('.message.jarvis');
+      if (jarvisMsgs.length) {
+        jarvisMsgs[jarvisMsgs.length - 1].classList.add('latest-jarvis');
+      }
+    }
+  }
+}
 
 // ── HUD Input (клік на кульку) ────────────────────────────────────────────
 function toggleInput() {

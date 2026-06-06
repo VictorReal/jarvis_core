@@ -275,6 +275,65 @@
     grid-column: 2;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+  /* у компактному прибираємо padding панелі, щоб рамка компактної секції
+     лягла по краю, а не з відступом 16px */
+  .center-panel:has(.comm-section.collapsed) {
+    padding: 0;
+  }
+
+  /* Центр: за замовчуванням чат займає ВЕСЬ центр (повний режим).
+     3-колонкова сітка (чат 1/3 + резерв 2/3) вмикається ЛИШЕ в компактному. */
+  .center-grid {
+    flex: 1;
+    display: flex;            /* повний режим — чат на всю ширину */
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .comm-section {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+    transition: max-height 0.35s ease;
+  }
+
+  /* Коли чат згорнутий — перемикаємо центр на сітку 1/3 + 2/3 резерв */
+  .center-grid:has(.comm-section.collapsed) {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  .center-grid:has(.comm-section.collapsed) .comm-section {
+    grid-column: 1;
+    flex: none;
+  }
+
+  .comm-title {
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.2s ease;
+  }
+  .comm-title:hover { color: var(--hud-accent); }
+
+  /* маркер стану згорнутості у заголовку */
+  .comm-title::after {
+    content: ' ▸';
+    font-size: 10px;
+    opacity: 0.5;
+  }
+  .comm-section:not(.collapsed) .comm-title::after {
+    content: ' ▾';
+  }
+
+  /* резерв 2/3 — показуємо лише в компактному режимі */
+  .center-reserve { display: none; }
+  .center-grid:has(.comm-section.collapsed) .center-reserve {
+    display: block;
+    grid-column: 2 / 4;
   }
 
   .messages-container {
@@ -346,6 +405,71 @@
     color: #ff2200;
     font-size: 10px;
     letter-spacing: 2px;
+  }
+
+  /* ── КОМПАКТНИЙ РЕЖИМ ЧАТУ ───────────────────────────────────────────
+     Клік на заголовок → фіксована висота (заголовок + 1 рядок),
+     показуємо ЛИШЕ останнє повідомлення JARVIS, без скролу/стрибків. */
+  .comm-section.collapsed {
+    max-height: 200px;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid var(--hud-accent-faint);
+    background: rgba(0, 10, 20, 0.6);
+    padding: 15px;
+  }
+  /* кутики як у .panel (верхній-лівий + нижній-правий) */
+  .comm-section.collapsed::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 40px; height: 40px;
+    border-top: 2px solid var(--hud-accent);
+    border-left: 2px solid var(--hud-accent);
+    pointer-events: none;
+  }
+  .comm-section.collapsed::after {
+    content: '';
+    position: absolute;
+    bottom: 0; right: 0;
+    width: 24px; height: 24px;
+    border-bottom: 2px solid var(--hud-accent);
+    border-right: 2px solid var(--hud-accent);
+    pointer-events: none;
+  }
+  .comm-section.collapsed .messages-container {
+    flex: none;
+    max-height: 150px;          /* область повідомлення (мінус заголовок+padding) */
+    overflow-y: auto;           /* довге повідомлення — скрол усередині */
+    gap: 0;
+  }
+  /* у компактному ховаємо всі повідомлення... */
+  .comm-section.collapsed .message {
+    display: none;
+  }
+  /* ...крім останнього JARVIS (його JS позначає класом .latest-jarvis).
+     Повне повідомлення, без обрізання — довге читається скролом. */
+  .comm-section.collapsed .message.latest-jarvis {
+    display: block;
+    align-self: stretch;
+    max-width: 100%;
+    animation: commSwap 0.4s ease;
+  }
+
+  /* анімація підміни: нове повідомлення плавно входить знизу */
+  @keyframes commSwap {
+    0%   { opacity: 0; transform: translateY(12px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  /* старе, що зникає (JS вішає .swapping-out на мить) */
+  .comm-section.collapsed .message.swapping-out {
+    display: block;
+    animation: commSwapOut 0.3s ease forwards;
+    overflow: hidden;
+  }
+  @keyframes commSwapOut {
+    0%   { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-12px); }
   }
 
   /* RIGHT */
@@ -1353,3 +1477,30 @@ box-shadow: 0 0 10px var(--hud-glow);
 .ticker-sep { color: var(--hud-accent-dim); margin: 0 6px; }
 .ticker-up { color: #00ff88; }
 .ticker-down { color: #ff5e7e; }
+/* ════════ WAKE SCENE — проявлення з чорного ════════ */
+.wake-black {
+  position: fixed; inset: 0; z-index: 9990; pointer-events: none;
+  background: #000; opacity: 1;
+  transition: opacity 0.6s ease;
+}
+.wake-black.wake-black-fade { opacity: 0; }
+/* блок прихований до своєї черги */
+.wake-hidden { opacity: 0 !important; transform: translateY(8px) scale(0.99); }
+/* проявлення блоку */
+.wake-appear {
+  animation: wake-appear-anim 0.7s ease-out;
+}
+@keyframes wake-appear-anim {
+  0%   { opacity: 0; transform: translateY(8px) scale(0.99);
+         box-shadow: 0 0 0 transparent; }
+  40%  { opacity: 1; }
+  60%  { box-shadow: 0 0 30px var(--hud-glow); border-color: var(--hud-accent); }
+  100% { opacity: 1; transform: translateY(0) scale(1); box-shadow: none; }
+}
+/* логотип спалах */
+.logo.wake-logo { animation: wake-logo-anim 1.5s ease-out; }
+@keyframes wake-logo-anim {
+  0%   { text-shadow: 0 0 20px var(--hud-accent), 0 0 40px var(--hud-glow); }
+  25%  { text-shadow: 0 0 40px var(--hud-accent), 0 0 90px var(--hud-accent), 0 0 130px var(--hud-glow); }
+  100% { text-shadow: 0 0 20px var(--hud-accent), 0 0 40px var(--hud-glow); }
+}

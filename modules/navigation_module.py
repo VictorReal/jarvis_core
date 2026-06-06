@@ -125,6 +125,157 @@ class NavigationModule:
             return self._route_google(destination_name)
         return self._route_osrm(destination_name)
 
+    def find_nearby(self, query: str, radius_m: int = 3000, top_k: int = 3) -> str:
+        """
+        Геопошук: знаходить найближчі місця за природним запитом ("кава", "аптека").
+        Places Text Search (New) якщо є ключ, інакше OSM (Nominatim) fallback.
+        Повертає готовий рядок для JARVIS з топ-K варіантами (назва + адреса).
+        Маршрут НЕ прокладається — це окрема команда get_route_to.
+        """
+        self.update_my_location()
+
+        # Захист: модель іноді дописує локацію в запит ("bars in Ataki, Moldova").
+        # Це псує пошук — обрізаємо все після " in "/" near "/" поблизу", бо
+        # локація береться з GPS автоматично через locationBias.
+        for sep in (" in ", " near ", " around ", " поблизу", " біля ", " в ", " у "):
+            idx = query.lower().find(sep)
+            if idx > 0:
+                query = query[:idx].strip()
+                break
+
+        if self._gmaps_key:
+            result = self._find_google(query, radius_m, top_k)
+            if result is not None:
+                return result
+            # None → Google не вдалось, падаємо в OSM
+        return self._find_osm(query, radius_m, top_k)
+
+    def _find_google(self, query: str, radius_m: int, top_k: int):
+        """Places Text Search (New). Повертає рядок або None (→ fallback на OSM)."""
+        try:
+            from api_guard import guard
+            if not guard.check("places"):
+                logger.warning("[PLACES] ліміт вичерпано — fallback на OSM")
+                return None
+
+            lat, lng = self.current_coords
+            url = "https://places.googleapis.com/v1/places:searchText"
+            headers = {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": self._gmaps_key,
+                # запитуємо лише потрібні поля (FieldMask) — менший біллінг
+                "X-Goog-FieldMask": (
+                    "places.displayName,places.formattedAddress,"
+                    "places.location,places.currentOpeningHours.openNow"
+                ),
+            }
+            body = {
+                "textQuery": query,
+                "languageCode": "en",
+                "maxResultCount": top_k,
+                # locationBias — зміщуємо результати до поточних координат
+                "locationBias": {
+                    "circle": {
+                        "center": {"latitude": lat, "longitude": lng},
+                        "radius": float(radius_m),
+                    }
+                },
+            }
+            r = requests.post(url, headers=headers, json=body, timeout=10)
+            if r.status_code != 200:
+                logger.warning(f"[PLACES] HTTP {r.status_code}: {r.text[:200]}")
+                return None
+
+            places = r.json().get("places", [])
+            if not places:
+                return f"Sir, I found no {query} within {radius_m // 1000} km."
+
+            guard.increment("places")
+
+            # Рахуємо відстань і ВІДКИДАЄМО задалеке (locationBias лише зміщує,
+            # не обмежує — тому Google інколи тягне за десятки км).
+            # Запас ×1.6: дорога довша за пряму, не ріжемо близьке через кривизну.
+            max_km = (radius_m / 1000.0) * 1.6
+            scored = []
+            for p in places:
+                loc = p.get("location", {})
+                if "latitude" not in loc or "longitude" not in loc:
+                    continue
+                dist_km = self._haversine_km(lat, lng, loc["latitude"], loc["longitude"])
+                if dist_km <= max_km:
+                    scored.append((dist_km, p))
+            scored.sort(key=lambda x: x[0])
+
+            if not scored:
+                return f"Sir, I found no {query} within {radius_m // 1000} km."
+
+            # Короткий вивід для голосу: назва + відстань + open/closed, БЕЗ адреси.
+            lines = [f"Sir, nearest {query}:"]
+            for i, (dist_km, p) in enumerate(scored[:top_k], 1):
+                name = p.get("displayName", {}).get("text", "Unknown")
+                open_now = p.get("currentOpeningHours", {}).get("openNow")
+                open_str = ""
+                if open_now is True:
+                    open_str = ", open"
+                elif open_now is False:
+                    open_str = ", closed"
+                lines.append(f"{i}. {name} ({dist_km} km{open_str}).")
+            return " ".join(lines)
+
+        except Exception as e:
+            logger.error(f"[PLACES] error: {e}")
+            return None
+
+    def _find_osm(self, query: str, radius_m: int, top_k: int) -> str:
+        """Fallback геопошук через OpenStreetMap (Nominatim). Без ключа і квоти."""
+        try:
+            lat, lng = self.current_coords
+            # Nominatim: bounded search у viewbox навколо поточних координат.
+            # ~0.03 градуса ≈ 3 км по широті.
+            delta = max(radius_m / 111000.0, 0.01)
+            results = self.geolocator.geocode(
+                query,
+                exactly_one=False,
+                limit=top_k,
+                viewbox=[(lng - delta, lat + delta), (lng + delta, lat - delta)],
+                bounded=True,
+                language="en",
+            )
+            if not results:
+                return f"Sir, I found no {query} nearby (OSM)."
+
+            max_km = (radius_m / 1000.0) * 1.6
+            lines = [f"Sir, nearest {query}:"]
+            count = 0
+            for loc in results:
+                dist_km = self._haversine_km(lat, lng, loc.latitude, loc.longitude)
+                if dist_km > max_km:
+                    continue
+                # коротка назва: перша частина адреси Nominatim (без міста/області/країни)
+                short = loc.address.split(",")[0].strip()
+                lines.append(f"{count + 1}. {short} ({dist_km} km).")
+                count += 1
+                if count >= top_k:
+                    break
+            if count == 0:
+                return f"Sir, I found no {query} within {radius_m // 1000} km."
+            return " ".join(lines)
+
+        except Exception as e:
+            logger.error(f"[PLACES] OSM error: {e}")
+            return f"Sir, I couldn't search for {query} right now."
+
+    @staticmethod
+    def _haversine_km(lat1, lon1, lat2, lon2) -> float:
+        """Відстань по прямій між двома точками (км), округлено до 0.1."""
+        from math import radians, sin, cos, sqrt, atan2
+        r = 6371.0
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = (sin(dlat / 2) ** 2
+             + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2)
+        return round(r * 2 * atan2(sqrt(a), sqrt(1 - a)), 1)
+
     def _route_google(self, destination_name: str) -> str:
         """Маршрут через Google Directions API."""
         try:

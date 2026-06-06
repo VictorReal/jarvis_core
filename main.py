@@ -8,14 +8,31 @@ import sounddevice as sd
 from pyngrok import ngrok
 
 from modules.voice_module import speak, _voice, set_voice_personality
-from modules.speech_module import start_home_conversation, start_ironman_conversation, set_lang_mode
-from modules.hud_module import run_hud, update_hud, add_message, set_hud_command_callback, set_music_action_callback, set_youtube_search_callback
+from modules.speech_module import start_home_conversation, start_ironman_conversation, set_lang_mode, register_tts, mark_tts_done
+from modules.hud_module import run_hud, update_hud, add_message, set_hud_command_callback, set_music_action_callback, set_youtube_search_callback, set_wake_callback
 from modules.reminder_module import ReminderModule
 from modules.spotify_poller import SpotifyPoller
 from weather_alert import WeatherAlert
 from day_logger import log_exchange
 from morning_briefing import MorningBriefing
 from calendar_notifier import CalendarNotifier
+from gmail_notifier import GmailNotifier
+
+
+# ── Прогрів важкого імпорту brain.processor (LangChain ~7с) у фоні ──────
+# Запускаємо ДО Jarvis(), щоб LangChain підтягувався паралельно з рештою
+# імпортів та ініціалізацією. Python кешує імпорти, тож подальший
+# `from brain.processor import Brain` у __init__ буде майже миттєвим.
+def _warmup_brain():
+    try:
+        import brain.processor  # noqa: F401
+    except Exception as e:
+        print(f"[WARMUP] brain.processor помилка: {e}")
+
+_brain_warmup_thread = threading.Thread(
+    target=_warmup_brain, daemon=True, name="BrainWarmup"
+)
+_brain_warmup_thread.start()
 
 
 def _detect_lang(text: str, fallback: str = "en") -> str:
@@ -39,8 +56,28 @@ class Jarvis:
         # Reminder — першим, бо Brain потребує його одразу
         self.reminder = ReminderModule(tts_callback=lambda text: self.safe_speak(text))
 
+        # Дочекатись фонового прогріву LangChain (зазвичай вже готовий — join миттєвий)
+        try:
+            _brain_warmup_thread.join(timeout=30)
+        except Exception:
+            pass
         from brain.processor import Brain
         self.brain = Brain(reminder_module=self.reminder)
+
+        # Doctor JARVIS Lvl1 — самодіагностика. Хуки ставимо рано (ловити краші
+        # вже під час ініціалізації). notify/hud допідключимо після Telegram.
+        try:
+            from modules.doctor_module import get_doctor
+            from modules.hud_module import log_activity
+            self.doctor = get_doctor(
+                llm=getattr(self.brain.agent, "llm", None),
+                hud_cb=log_activity,
+            )
+            self.doctor.install_hooks()
+            print("[JARVIS] Doctor самодіагностика активована")
+        except Exception as e:
+            print(f"[JARVIS] Doctor не вдалося підключити: {e}")
+            self.doctor = None
 
         self.lock = threading.Lock()
         self.is_speaking = threading.Event()
@@ -61,6 +98,7 @@ class Jarvis:
         # Підключаємо обробник команд з браузера (клік на кульку)
         set_hud_command_callback(lambda text: self.handle_command(text))
         set_music_action_callback(self._handle_music_action)
+        set_wake_callback(lambda: self.wake_mode(silent=True))
 
         # YouTube — пошук з HUD-поля + голосовий тул
         try:
@@ -102,6 +140,7 @@ class Jarvis:
 
         # Calendar Notifier — підключаємо після Telegram щоб мати notify_owner
         self.cal_notifier = None  # буде ініціалізовано після Telegram
+        self.gmail_notifier = None  # буде ініціалізовано після Telegram
 
         # Telegram
         if os.getenv("TELEGRAM_TOKEN"):
@@ -113,6 +152,10 @@ class Jarvis:
             # Підключаємо Telegram до weather і briefing
             self.weather_alert._telegram = self.telegram.notify_owner
             self.briefing._telegram = self.telegram.notify_owner
+
+            # Doctor: тепер є Telegram — підключаємо нотифікацію крашів
+            if self.doctor:
+                self.doctor._notify = self.telegram.notify_owner
 
             # Mood: підключаємо Telegram-доставку (текст + дашборд-фото)
             try:
@@ -143,6 +186,16 @@ class Jarvis:
                 )
                 self.cal_notifier.start()
                 print("[JARVIS] Calendar notifier запущено")
+
+            # Gmail Notifier — фоновий агент важливих листів (кожні 15 хв)
+            if self.brain.gmail:
+                self.gmail_notifier = GmailNotifier(
+                    gmail_module=self.brain.gmail,
+                    notify_callback=self.telegram.notify_owner,
+                    tts_callback=lambda text: self.safe_speak(text),
+                )
+                self.gmail_notifier.start()
+                print("[JARVIS] Gmail notifier запущено")
         else:
             print("[JARVIS] Telegram токен не знайдено — бот вимкнено")
 
@@ -178,7 +231,15 @@ class Jarvis:
             is_ultron = _voice.personality == "ultron"
             print(f">>> {'ULTRON' if is_ultron else 'JARVIS'}: {text}")
             add_message("ultron" if is_ultron else "jarvis", text)
+            try:
+                register_tts(text)        # echo-фільтр: запам'ятати що сказали
+            except Exception:
+                pass
             speak(text, lang)
+            try:
+                mark_tts_done()
+            except Exception:
+                pass
             update_hud("status", "STANDBY")
             self.is_speaking.clear()
 
@@ -202,15 +263,14 @@ class Jarvis:
                     self.safe_speak("Ultron mode online. How... quaint that you think you're in control.", lang="en")
                     time.sleep(1.0)
                     from modules.speech_module import start_home_conversation
-                    start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
+                    start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode, special_handler=lambda t: self.handle_command(t, log_user=False))
                 else:
                     self.safe_speak("Home mode activated. Continuous monitoring online, Sir.")
                     time.sleep(0.8)
 
     def sleep_mode(self):
         """Знижує гучність, гасить HUD, ставить нагадування на ранок."""
-        if self._sleep_active:
-            return
+        was_active = self._sleep_active
         self._sleep_active = True
         try:
             self.brain.music_module.set_volume(10)
@@ -221,18 +281,34 @@ class Jarvis:
             socketio.emit('state_update', {'sleep': True})
         except Exception:
             pass
-        try:
-            from datetime import datetime, timedelta
-            wake_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
-            self.reminder.add_reminder("Good morning, Sir. Time to wake up.", wake_time)
-        except Exception:
-            pass
+        if not was_active:   # ранковий reminder лише при першому засинанні
+            try:
+                from datetime import datetime, timedelta
+                wake_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                self.reminder.add_reminder("Good morning, Sir. Time to wake up.", wake_time)
+            except Exception:
+                pass
         self.safe_speak("Good night, Sir. Systems entering low-power mode.")
         if hasattr(self, 'telegram'):
             try:
                 self.telegram.notify_owner("🌙 JARVIS sleep mode activated.")
             except Exception:
                 pass
+
+    def wake_mode(self, silent: bool = False):
+        """Прокидання зі sleep: знімає затемнення, повертає гучність."""
+        self._sleep_active = False
+        try:
+            from modules.hud_module import socketio
+            socketio.emit('state_update', {'sleep': False})
+        except Exception:
+            pass
+        try:
+            self.brain.music_module.set_volume(40)
+        except Exception:
+            pass
+        if not silent:
+            self.safe_speak("Good morning, Sir. Systems back online.")
 
     def _handle_music_action(self, action, value=None):
         """Прямі дії плеєра з HUD (без LLM)."""
@@ -275,9 +351,11 @@ class Jarvis:
         except Exception as e:
             print(f"[HUD MUSIC] помилка {action}: {e}")
 
-    def handle_command(self, text: str, lang: str = "en"):
+    def handle_command(self, text: str, lang: str = "en", log_user: bool = True):
         update_hud("status", "THINKING")
-        add_message("user", text)
+        if log_user:
+            add_message("user", text)
+            print(f">>> SIR: {text}")     # друк репліки користувача в консоль
         text_lower = text.lower()
 
         if any(p in text_lower for p in ["sleep mode", "good night", "на ніч", "спати"]):
@@ -304,6 +382,23 @@ class Jarvis:
             self.brain.agent.clear_history()
             msg = "Пам'ять очищено, сер." if lang == "uk" else "Memory wiped, Sir."
             self.safe_speak(msg, lang)
+            return
+
+        # Кіно-сценарій «wake up daddy's home» — ПЕРЕД агентом (інакше піде в play_music)
+        if any(p in text_lower for p in ["wake up daddy", "daddy's home", "daddys home",
+                                          "daddy is home", "wake up daddy's home"]):
+            try:
+                from modules.wake_scene import run_wake_scene
+                run_wake_scene(self, self.safe_speak)
+            except Exception as e:
+                print(f"[WAKE] Помилка сценарію: {e}")
+            update_hud("status", "ONLINE")
+            return
+
+        # Просте «wake up» — прокидання зі sleep (після daddy-перевірки!)
+        if self._sleep_active and any(p in text_lower for p in ["wake up", "wakeup", "прокинься", "підйом"]):
+            self.wake_mode()
+            update_hud("status", "ONLINE")
             return
 
         response = self.brain.process(text, lang=lang)
@@ -431,11 +526,11 @@ class Jarvis:
                     time.sleep(0.4)
 
                     if self.mode == "iron man":
-                        start_ironman_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
+                        start_ironman_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode, special_handler=lambda t: self.handle_command(t, log_user=False))
                     elif self.mode == "ultron":
-                        start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
+                        start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode, special_handler=lambda t: self.handle_command(t, log_user=False))
                     else:
-                        start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode)
+                        start_home_conversation(self.brain, self.safe_speak, mode_callback=self.set_mode, special_handler=lambda t: self.handle_command(t, log_user=False))
 
                     # чистимо буфер після розмови — прибираємо TTS-луну що накопичилась
                     audio_buffer.clear()
@@ -456,6 +551,8 @@ class Jarvis:
                 self.weather_alert.stop()
                 if self.cal_notifier:
                     self.cal_notifier.stop()
+                if self.gmail_notifier:
+                    self.gmail_notifier.stop()
                 print("[Системи офлайн]")
 
 

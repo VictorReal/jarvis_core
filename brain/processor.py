@@ -53,6 +53,14 @@ class Brain:
             return "Як бажаєте, сер. [EXIT]" if lang == "uk" else "As you wish, Sir. [EXIT]"
 
         response = self.agent.ask(command, lang=lang)
+
+        # Захист: якщо агент не зміг відповісти (усі моделі впали тощо) —
+        # ask() може повернути None або порожнє. Не крашимо весь обробник.
+        if not response or not isinstance(response, str):
+            return ("Вибачте, Sir, мої системи міркування дали збій. Спробуйте ще раз."
+                    if lang == "uk"
+                    else "Sir, my reasoning systems encountered an error. Please try again.")
+
         res_upper = response.upper()
 
         if any(w in res_upper for w in ["GOODBYE", "DISMISSED", "BYE", "БУВАЙТЕ", "ДО ПОБАЧЕННЯ"]):

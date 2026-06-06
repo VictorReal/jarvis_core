@@ -23,3 +23,5 @@ matplotlib
 openpyxl 
 dateparser
 feedparser
+sentence-transformers
+chromadb

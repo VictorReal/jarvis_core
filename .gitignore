@@ -1,15 +1,40 @@
-﻿.env
+﻿# ── Секрети та облікові дані (НІКОЛИ не комітити) ──────────────────────
+.env
+.env.*
+!.env.example
+token.json
+credentials.json
+*.key
+*.pem
+
+# ── Віртуальне середовище та кеш Python ───────────────────────────────
 .venv/
+venv/
 __pycache__/
-*.mp3
-token.jsoncredentials.json
-token.json
-api_usage.json
-data/chat_history.jsoncredentials.json
-token.json
+*.pyc
+*.pyo
+*.pyd
+.cache/
+.pytest_cache/
+
+# ── Дані користувача (пам'ять, профілі, історія, аналітика) ───────────
 data/
-*.csv
-*.md
-*.json
 logs/
-.cache
+api_usage.json
+*.csv
+
+# ── Медіа та згенеровані файли ────────────────────────────────────────
+*.mp3
+*.wav
+*.png
+*.jpg
+
+# ── RAG / векторна база ───────────────────────────────────────────────
+data/rag_db/
+
+# ── ОС та редактори ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

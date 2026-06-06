@@ -47,7 +47,7 @@ def _register_tts(text: str):
         norm = _normalize_for_echo(text)
         if norm:
             _recent_tts.append((norm, time.time()))
-            if len(_recent_tts) > 5:
+            if len(_recent_tts) > 12:        # більший буфер (довгий брифінг)
                 _recent_tts.pop(0)
 
 
@@ -56,6 +56,14 @@ def _mark_tts_done():
     global _tts_active
     with _tts_lock:
         _tts_active = False
+
+
+# Публічні обгортки — щоб main.safe_speak теж реєстрував озвучку в echo-фільтрі
+def register_tts(text: str):
+    _register_tts(text)
+
+def mark_tts_done():
+    _mark_tts_done()
 
 
 def _wait_while_tts():
@@ -76,7 +84,7 @@ def _is_echo(recognized: str) -> bool:
         return False
     now = time.time()
     with _tts_lock:
-        active = [(t, ts) for t, ts in _recent_tts if now - ts < 5]
+        active = [(t, ts) for t, ts in _recent_tts if now - ts < 6]
     norm_words = set(norm.split())
     for tts_text, _ in active:
         # recognized — шматок нашої TTS
@@ -231,7 +239,7 @@ def _try_identify_speaker(listener_data: list) -> str | None:
         return None
 
 
-def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
+def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None, special_handler=None):
     """HOME MODE — постійна сесія (HOME або ULTRON), закривається тільки по 'goodbye'."""
     safe_speak_func = make_echo_aware(safe_speak_func)  # фільтр самовідлуння
     listener = SpeechListener()
@@ -262,6 +270,18 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
                 pass
 
         lower = user_text.lower()
+
+        # Спеціальні фрази (sleep/wake/daddy-сценарій) — через handle_command (та сама
+        # логіка, що й текст/HUD), щоб голос не йшов у агента (інакше play_music/lock_screen)
+        special = ["wake up daddy", "daddy's home", "daddys home", "daddy is home",
+                   "sleep mode", "good night", "на ніч", "спати",
+                   "wake up", "wakeup", "прокинься", "підйом"]
+        if special_handler and any(p in lower for p in special):
+            try:
+                special_handler(user_text)
+            except Exception as e:
+                print(f"[SPECIAL] Помилка: {e}")
+            continue   # лишаємось у HOME-сесії
 
         # Перемикання режимів — тільки явні команди, не відлуння
         if mode_callback:
@@ -321,7 +341,7 @@ def start_home_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
         print(f"[{mode_label} MODE] Слухаю далі...")
 
 
-def start_ironman_conversation(jarvis_brain, safe_speak_func, mode_callback=None):
+def start_ironman_conversation(jarvis_brain, safe_speak_func, mode_callback=None, special_handler=None):
     """
     IRON MAN MODE — рація:
     одна команда → одна відповідь → одразу закрилось (до наступного wake word).
@@ -347,6 +367,18 @@ def start_ironman_conversation(jarvis_brain, safe_speak_func, mode_callback=None
         return
 
     lower = user_text.lower()
+
+    # Спеціальні фрази через handle_command (sleep/wake/daddy)
+    special = ["wake up daddy", "daddy's home", "daddys home", "daddy is home",
+               "sleep mode", "good night", "на ніч", "спати",
+               "wake up", "wakeup", "прокинься", "підйом"]
+    if special_handler and any(p in lower for p in special):
+        try:
+            special_handler(user_text)
+        except Exception as e:
+            print(f"[SPECIAL] Помилка: {e}")
+        _restore_volume(jarvis_brain)
+        return
 
     # Перемикання режимів — тільки явні команди, не відлуння
     if mode_callback:

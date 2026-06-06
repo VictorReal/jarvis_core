@@ -195,6 +195,20 @@ def get_session_summary() -> str:
 #  2. Short memory (7 днів)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_location_fact(fact: str) -> bool:
+    """True якщо факт про місцеперебування користувача — такі НЕ зберігаємо
+    в пам'яті (локація завжди береться live через тули, інакше застаріває
+    і нав'язується моделі, напр. 'Sir is in Ataki, Moldova')."""
+    f = fact.lower()
+    markers = (
+        "is in ", "is near", "located", "location", "whereabouts",
+        "in otaci", "in ataki", "moldova", "strada", "vulytsya", "вулиц",
+        "знаходиться", "перебува", "поблизу", " near ", "address",
+    )
+    # фрази про переміщення/координати
+    return any(m in f for m in markers)
+
+
 def update_short_memory(llm):
     """
     Читає лог сьогоднішнього дня і витягує факти → short_memory.json.
@@ -214,8 +228,10 @@ def update_short_memory(llm):
             SystemMessage(content=(
                 "Extract key facts from today's JARVIS activity log. "
                 "Return a JSON array of short fact strings (max 10). "
-                "Focus on: preferences, decisions, places, people mentioned, tasks done. "
-                "Example: [\"Sir prefers jazz in the morning\", \"Visited Kyiv today\"]. "
+                "Focus on: preferences, decisions, people mentioned, tasks done. "
+                "Do NOT include the user's location, city, or current whereabouts — "
+                "location is always taken live, never remembered. "
+                "Example: [\"Sir prefers jazz in the morning\", \"Called mom\"]. "
                 "Output ONLY the JSON array, nothing else."
             )),
             HumanMessage(content=log[:3000]),  # не більше 3к символів
@@ -224,6 +240,11 @@ def update_short_memory(llm):
         raw = resp.content.strip()
         # Чистимо markdown і рятуємо навіть обірваний JSON
         facts = _safe_json_array(raw)
+        if not facts:
+            return
+
+        # Викидаємо факти про локацію — вони застарівають і нав'язуються моделі
+        facts = [f for f in facts if isinstance(f, str) and not _is_location_fact(f)]
         if not facts:
             return
 
@@ -253,6 +274,10 @@ def get_short_memory_context(max_facts: int = 5) -> str:
     all_facts = []
     for entry in entries[:3]:  # останні 3 дні
         all_facts.extend(entry.get("facts", []))
+
+    # На читанні теж відсіюємо локацію — захищає від старих записів у файлі,
+    # які ще не перезаписані новою (вже відфільтрованою) логікою.
+    all_facts = [f for f in all_facts if isinstance(f, str) and not _is_location_fact(f)]
 
     if not all_facts:
         return ""
@@ -324,9 +349,11 @@ def get_long_memory_context() -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PERSON_EXTRACT_PROMPT = (
-    "Analyze this conversation exchange and extract any new facts about people. "
-    "Look for: names, relationships ('my sister', 'my boss'), personality traits, "
-    "preferences, locations, jobs, or any personal details. "
+    "Analyze this conversation exchange and extract any new facts about PEOPLE only. "
+    "Look for: names of people, relationships ('my sister', 'my boss'), personality "
+    "traits, preferences, jobs, or personal details about a person. "
+    "Do NOT extract cities, countries, places, businesses, or geographic locations — "
+    "only actual people. "
     "Return a JSON array of objects: [{\"name\": str, \"relationship\": str, \"fact\": str}]. "
     "If no new person-facts found, return empty array []. "
     "Output ONLY the JSON array, nothing else."
@@ -365,6 +392,14 @@ def extract_and_save_people(user_input: str, jarvis_response: str, llm):
                     return n[:-1]  # Вікторе → Віктор
                 return n
 
+            # Факти, що означають "це просто локація" — не створюємо профіль.
+            # (екстрактор раніше плодив профілі міст: "Ataki: location")
+            LOCATION_FACTS = {
+                "location", "is a location", "a location", "place", "is a place",
+                "city", "is a city", "country", "is a country", "локація",
+                "місце", "місто", "країна",
+            }
+
             for item in items:
                 name = item.get("name", "").strip()
                 relationship = item.get("relationship", "acquaintance")
@@ -372,6 +407,10 @@ def extract_and_save_people(user_input: str, jarvis_response: str, llm):
                 if not name or not fact or len(name) > 50 or len(name) < 2:
                     continue
                 if name.lower() in STOP_NAMES:
+                    continue
+                # пропускаємо геосутності (факт = просто "location"/"city"/...)
+                if fact.lower() in LOCATION_FACTS:
+                    logger.debug(f"[MEMORY ENGINE] Пропущено локацію: {name} ({fact})")
                     continue
                 name = _normalize_name(name)
 

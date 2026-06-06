@@ -23,6 +23,7 @@ USAGE_FILE = Path("api_usage.json")
 LIMITS = {
     "vision":     800,    # 80% від 1000 безкоштовних
     "directions": 500,    # консервативно, у нас $300 кредиту
+    "places":     800,    # геопошук (Places Text Search New), консервативно
     "youtube":    8000,   # 80% від 10000 units/день * 30
     "gmail":      5000,   # дуже щедро, практично безлімітно
     "calendar":   5000,

@@ -43,7 +43,7 @@ HTML_TEMPLATE = """
 <body>
 <div class="scanline"></div>
 
-<div id="sleep-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:#000;z-index:999;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;" onclick="this.style.display='none'">
+<div id="sleep-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:#000;z-index:999;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;" onclick="wakeFromOverlay()">
   <div style="font-family:'Orbitron',sans-serif;font-size:18px;letter-spacing:8px;color:#00d4ff18;">S L E E P</div>
   <div style="font-size:10px;color:#00d4ff10;margin-top:12px;letter-spacing:4px;">CLICK TO WAKE</div>
 </div>
@@ -524,8 +524,14 @@ HTML_TEMPLATE = """
 
   <!-- CENTER -->
   <div class="panel center-panel">
-    <div class="panel-title">◈ Communication Log</div>
-    <div class="messages-container" id="messages"></div>
+    <div class="center-grid">
+      <div class="comm-section" id="comm-section">
+        <div class="panel-title comm-title" onclick="toggleCommLog()" title="Click to collapse / expand">◈ Communication Log</div>
+        <div class="messages-container" id="messages"></div>
+      </div>
+      <!-- праві 2/3 — резерв під майбутні секції -->
+      <div class="center-reserve"></div>
+    </div>
   </div>
 
   <!-- RIGHT — Environment + Analytics minis (Health, Finance, People) -->
@@ -748,6 +754,21 @@ def set_music_action_callback(fn):
     """fn(action: str, value=None) — мапиться на music_module у main."""
     global _music_action_callback
     _music_action_callback = fn
+
+# callback для повного прокидання (клік по sleep-overlay)
+_wake_callback = None
+
+def set_wake_callback(fn):
+    """fn() — викликається при кліку по sleep-overlay (повне прокидання)."""
+    global _wake_callback
+    _wake_callback = fn
+
+@socketio.on('wake_from_overlay')
+def on_wake_from_overlay(data):
+    """Клік по sleep-overlay → повне прокидання в main (wake_mode)."""
+    if _wake_callback:
+        import threading
+        threading.Thread(target=_wake_callback, daemon=True).start()
 
 @socketio.on('music_action')
 def on_music_action(data):

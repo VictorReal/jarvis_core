@@ -27,6 +27,12 @@ class VoiceModule:
         if not clean_text:
             return
 
+        # Крапки між реченнями → коми, щоб TTS робив менші паузи (звучить плавніше).
+        # Чіпаємо лише "крапка + пробіл + наступне слово" — не зачіпає числа (3.14),
+        # абревіатури (J.A.R.V.I.S.) і крапку в самому кінці фрази.
+        import re
+        clean_text = re.sub(r'\.(\s+)(?=[A-ZА-ЯІЇЄҐ0-9])', r',\1', clean_text)
+
         if self.personality == "ultron":
             self.current_voice = self.VOICES["ultron"]
         else:
