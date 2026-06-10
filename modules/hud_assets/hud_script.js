@@ -588,6 +588,8 @@ socket.on('state_update', (data) => {
     // Компактний режим: показуємо лише ОСТАННЄ повідомлення JARVIS.
     if (data.new_message.role === 'jarvis') {
       markLatestJarvis(div);
+      // тренування могло щойно залогуватись голосом/текстом — оновимо мапу
+      if (_mmLoaded) loadMuscleMap();
     }
   }
 });
@@ -614,6 +616,258 @@ function markLatestJarvis(newDiv) {
 }
 
 // ── Communication Log: згортання/розгортання (клік на заголовок) ──────────
+// ── Мʼязова мапа ──────────────────────────────────────────────────────────
+let _mmLoaded = false;       // SVG вже інлайнено?
+let _mmView = 'front';       // поточний бік
+
+// людські назви груп для tooltip
+const MM_LABELS = {
+  shoulders: 'Shoulders', chest: 'Chest', abs: 'Abs', obliques: 'Obliques',
+  biceps: 'Biceps', forearms: 'Forearms', quads: 'Quads',
+  calves_front: 'Calves', calves_back: 'Calves', traps: 'Traps',
+  triceps: 'Triceps', lats: 'Lats', lower_back: 'Lower back',
+  rear_delts: 'Rear delts', glutes: 'Glutes', hamstrings: 'Hamstrings',
+};
+
+// інлайнимо SVG (раз), потім вішаємо tooltip і вантажимо дані
+function ensureMuscleMap() {
+  if (_mmLoaded) { loadMuscleMap(); return; }
+  const holder = document.getElementById('mm-svg-holder');
+  if (!holder) return;
+  fetch('/muscle_map.svg')
+    .then(function (r) { return r.text(); })
+    .then(function (svgText) {
+      holder.innerHTML = svgText;
+      _mmLoaded = true;
+      _mmBindTooltips();
+      setMuscleView(_mmView);
+      loadMuscleMap();
+    })
+    .catch(function (e) { console.warn('[MM] svg load error', e); });
+}
+
+// перемикач FRONT/BACK
+function setMuscleView(view) {
+  _mmView = view;
+  const front = document.getElementById('mm-front-layer');
+  const back = document.getElementById('mm-back-layer');
+  if (front) front.style.display = (view === 'front') ? '' : 'none';
+  if (back) back.style.display = (view === 'back') ? '' : 'none';
+  const bf = document.getElementById('mm-btn-front');
+  const bb = document.getElementById('mm-btn-back');
+  if (bf) bf.classList.toggle('active', view === 'front');
+  if (bb) bb.classList.toggle('active', view === 'back');
+}
+
+// надіслати підсумок тренувань (текст + PNG) у Telegram
+function sendWorkoutToTelegram() {
+  const btn = document.getElementById('mm-btn-tg');
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  fetch('/api/workout/telegram', { method: 'POST' })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (btn) {
+        btn.textContent = data.ok ? '✓' : '✕';
+        setTimeout(function () { btn.textContent = '✈'; btn.disabled = false; }, 2000);
+      }
+    })
+    .catch(function () {
+      if (btn) { btn.textContent = '✕'; setTimeout(function () { btn.textContent = '✈'; btn.disabled = false; }, 2000); }
+    });
+}
+
+// фетч стану груп → застосувати класи fresh/mid/old
+function loadMuscleMap() {
+  fetch('/api/workout/map')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data || !data.ok || !data.map) return;
+      applyMuscleMap(data.map);
+    })
+    .catch(function (e) { console.warn('[MM] map data error', e); });
+}
+
+// застосовує стани до всіх зон (front+back). Парні зони (один id) — обидві половини
+function applyMuscleMap(map) {
+  const holder = document.getElementById('mm-svg-holder');
+  if (!holder) return;
+  holder.querySelectorAll('.muscle').forEach(function (el) {
+    el.classList.remove('fresh', 'mid', 'old');
+    const info = map[el.id];
+    const label = MM_LABELS[el.id] || el.id;
+    if (info && info.state && info.state !== 'none') {
+      el.classList.add(info.state);
+      const h = (info.hours != null) ? Math.round(info.hours) + 'h ago' : '';
+      el.dataset.mmlabel = label + (h ? ' — ' + h : '');
+    } else {
+      el.dataset.mmlabel = label + ' — not trained';
+    }
+  });
+}
+
+// tooltip при наведенні
+function _mmBindTooltips() {
+  let tip = document.getElementById('mm-tooltip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'mm-tooltip';
+    tip.style.cssText = 'position:fixed;pointer-events:none;background:rgba(0,20,30,.95);' +
+      'border:1px solid var(--hud-accent);padding:3px 8px;font-size:10px;' +
+      'color:var(--hud-accent);display:none;letter-spacing:1px;z-index:1000;';
+    document.body.appendChild(tip);
+  }
+  const holder = document.getElementById('mm-svg-holder');
+  holder.querySelectorAll('.muscle').forEach(function (el) {
+    el.addEventListener('mousemove', function (e) {
+      tip.style.display = 'block';
+      tip.style.left = (e.clientX + 12) + 'px';
+      tip.style.top = (e.clientY + 12) + 'px';
+      tip.textContent = el.dataset.mmlabel || (MM_LABELS[el.id] || el.id);
+    });
+    el.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+  });
+}
+
+// ── ARMOR BUILD (зона 4) ──────────────────────────────────────────────────
+let _arLoaded = false;
+let _arView = 'front';
+let _arColors = {};
+
+// людські назви деталей для tooltip
+const AR_LABELS = {
+  helmet_top: 'Helmet (top)', helmet_faceplate: 'Faceplate', helmet_chin: 'Chin',
+  neck: 'Neck', chest: 'Chest', abs: 'Abs', cod: 'Cod', upperthigh: 'Upper thigh',
+  left_shoulder: 'L Shoulder', right_shoulder: 'R Shoulder',
+  left_arm: 'L Arm', right_arm: 'R Arm', left_biceps: 'L Biceps', right_biceps: 'R Biceps',
+  left_triceps: 'L Triceps', right_triceps: 'R Triceps',
+  left_forearm: 'L Forearm', right_forearm: 'R Forearm',
+  left_thigh: 'L Thigh', right_thigh: 'R Thigh', left_knee: 'L Knee', right_knee: 'R Knee',
+  left_shin: 'L Shin', right_shin: 'R Shin', left_foot: 'L Foot', right_foot: 'R Foot',
+  left_upperback: 'L Upperback', right_upperback: 'R Upperback',
+  helmet: 'Helmet (back)', back: 'Upper back', midback: 'Mid back', lowback: 'Lower back',
+  left_elbow: 'L Elbow', right_elbow: 'R Elbow',
+};
+const AR_STATUS_LABEL = { done: 'done', printing: 'printing', not_printed: 'not printed' };
+
+function ensureArmor() {
+  if (_arLoaded) { loadArmorMap(); return; }
+  const holder = document.getElementById('ar-svg-holder');
+  if (!holder) return;
+  fetch('/armor_map.svg')
+    .then(function (r) { return r.text(); })
+    .then(function (svgText) {
+      holder.innerHTML = svgText;
+      _arLoaded = true;
+      _arBindParts();
+      loadArmorMap();
+    })
+    .catch(function (e) { console.warn('[AR] svg load error', e); });
+}
+
+function setArmorView(view) {
+  _arView = view;
+  // перемикання front/back шарів броні
+  const front = document.getElementById('armor-front-layer');
+  const back = document.getElementById('armor-back-layer');
+  if (front) front.style.display = (view === 'front') ? '' : 'none';
+  if (back) back.style.display = (view === 'back') ? '' : 'none';
+  const bf = document.getElementById('ar-btn-front');
+  const bb = document.getElementById('ar-btn-back');
+  if (bf) bf.classList.toggle('active', view === 'front');
+  if (bb) bb.classList.toggle('active', view === 'back');
+}
+
+function loadArmorMap() {
+  fetch('/api/armor/map')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data || !data.map) return;
+      _arColors = data.colors || {};
+      applyArmorMap(data.map);
+      updateArmorProgress(data.progress);
+    })
+    .catch(function (e) { console.warn('[AR] map data error', e); });
+}
+
+function applyArmorMap(map) {
+  const holder = document.getElementById('ar-svg-holder');
+  if (!holder) return;
+  holder.querySelectorAll('.armor-part').forEach(function (el) {
+    const pid = el.id.replace(/^ap-/, '');
+    const status = map[pid] || 'not_printed';
+    el.classList.remove('done', 'printing', 'not_printed');
+    el.classList.add(status);
+    // колір беремо з data-color → канонічна палітра; видимість керується класом
+    const colKey = el.getAttribute('data-color');
+    const col = _arColors[colKey] || '#8b1a1a';
+    el.querySelectorAll('path').forEach(function (p) {
+      p.style.fill = col;   // колір завжди заданий; not_printed ховається через fill-opacity:0 у CSS
+    });
+    el.dataset.arlabel = (AR_LABELS[pid] || pid) + ' — ' + (AR_STATUS_LABEL[status] || status);
+  });
+}
+
+function updateArmorProgress(pr) {
+  if (!pr) return;
+  const fill = document.getElementById('ar-progress-fill');
+  const label = document.getElementById('ar-progress-label');
+  if (fill) fill.style.width = pr.percent + '%';
+  if (label) {
+    let t = pr.percent + '% — ' + pr.done + '/' + pr.total + ' parts';
+    if (pr.printing) t += ' (' + pr.printing + ' printing)';
+    label.textContent = t;
+  }
+}
+
+// клік по деталі → цикл статусу → збереження → оновлення
+function _arBindParts() {
+  let tip = document.getElementById('ar-tooltip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'ar-tooltip';
+    tip.style.cssText = 'position:fixed;pointer-events:none;background:rgba(0,20,30,.95);' +
+      'border:1px solid var(--hud-accent);padding:3px 8px;font-size:10px;' +
+      'color:var(--hud-accent);display:none;letter-spacing:1px;z-index:1000;';
+    document.body.appendChild(tip);
+  }
+  const holder = document.getElementById('ar-svg-holder');
+  holder.querySelectorAll('.armor-part').forEach(function (el) {
+    el.addEventListener('mousemove', function (e) {
+      tip.style.display = 'block';
+      tip.style.left = (e.clientX + 12) + 'px';
+      tip.style.top = (e.clientY + 12) + 'px';
+      tip.textContent = el.dataset.arlabel || el.id.replace(/^ap-/, '');
+    });
+    el.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+    el.addEventListener('click', function () {
+      const pid = el.id.replace(/^ap-/, '');
+      fetch('/api/armor/cycle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ part_id: pid }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data || !data.ok) return;
+          // варіант A: оновлюємо ВСІ деталі з цим pid (front + back шари)
+          const holder = document.getElementById('ar-svg-holder');
+          const colKey = el.getAttribute('data-color');
+          const col = _arColors[colKey] || '#8b1a1a';
+          const label = (AR_LABELS[pid] || pid) + ' — ' + (AR_STATUS_LABEL[data.status] || data.status);
+          holder.querySelectorAll('[id="ap-' + pid + '"]').forEach(function (g) {
+            g.classList.remove('done', 'printing', 'not_printed');
+            g.classList.add(data.status);
+            g.querySelectorAll('path').forEach(function (p) { p.style.fill = col; });
+            g.dataset.arlabel = label;
+          });
+          tip.textContent = label;
+          updateArmorProgress(data.progress);
+        })
+        .catch(function (e) { console.warn('[AR] cycle error', e); });
+    });
+  });
+}
+
 function toggleCommLog() {
   const section = document.getElementById('comm-section');
   if (!section) return;
@@ -629,6 +883,10 @@ function toggleCommLog() {
         jarvisMsgs[jarvisMsgs.length - 1].classList.add('latest-jarvis');
       }
     }
+    // мʼязова мапа зʼявляється в компактному режимі — підвантажуємо її
+    ensureMuscleMap();
+    // трекер броні (зона 4) — теж компактний режим
+    ensureArmor();
   }
 }
 
@@ -1219,6 +1477,13 @@ function renderPeopleModal(people, query) {
   container.innerHTML = sortedRels.map(rel => {
     const peopleInGroup = groups[rel];
     const cards = peopleInGroup.map(p => {
+      const residence = p.location && p.location.residence 
+      ? p.location.residence 
+      : "Unknown residence";
+      const occupations = p.occupations || [];
+      const lastOcc = occupations.length > 0 
+        ? occupations[occupations.length - 1] 
+        : "No occupation";
       const facts = (p.facts || []);
       const factsHtml = facts.length === 0
         ? '<div class="pdc-empty">No facts recorded</div>'
@@ -1226,7 +1491,8 @@ function renderPeopleModal(people, query) {
       return `
         <div class="people-detail-card">
           <div class="pdc-name">${escapeHtml(p.name.toUpperCase())}</div>
-          <div class="pdc-rel">${escapeHtml(p.relationship || 'unknown')}</div>
+          <div class="pdc-rel">${escapeHtml(residence)}</div>
+          <div class="pdc-fact">${escapeHtml(lastOcc)}</div>
           <div class="pdc-facts">${factsHtml}</div>
         </div>
       `;
@@ -1381,7 +1647,7 @@ function reloadCorrCharts() {
   var t = Date.now();
   document.getElementById('chart-corr-matrix').src    = '/correlation/chart?panel=matrix&t=' + t;
   document.getElementById('chart-corr-timeline').src  = '/correlation/chart?panel=timeline&t=' + t;
-  document.getElementById('chart-corr-dashboard').src = '/correlation/chart?panel=dashboard&t=' + t;
+  document.getElementById('chart-corr-scatter').src   = '/correlation/chart?panel=scatter&t=' + t;
 }
 
 function refreshCorr() {

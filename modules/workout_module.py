@@ -139,6 +139,19 @@ EXERCISE_MAP = {
     "плечі": ["shoulders", "rear_delts"], "shoulders": ["shoulders", "rear_delts"],
     "ноги": ["quads", "hamstrings", "glutes", "calves_front", "calves_back"],
     "legs": ["quads", "hamstrings", "glutes", "calves_front", "calves_back"],
+    # англійські однослівні назви груп/мʼязів (щоб 'add biceps' розпізнавалось)
+    "biceps": ["biceps"], "bicep": ["biceps"],
+    "triceps": ["triceps"], "tricep": ["triceps"],
+    "abs": ["abs", "obliques"], "core": ["abs", "obliques"],
+    "forearms": ["forearms"], "forearm": ["forearms"],
+    "quads": ["quads"], "quadriceps": ["quads"],
+    "hamstrings": ["hamstrings"], "hamstring": ["hamstrings"],
+    "glutes": ["glutes"], "calves": ["calves_front", "calves_back"],
+    "lats": ["lats"], "traps": ["traps"], "trapezius": ["traps"],
+    "obliques": ["obliques"],
+    "hands": ["biceps", "triceps", "forearms"],
+    "arms": ["biceps", "triceps", "forearms"],
+    "руки": ["biceps", "triceps", "forearms"],
 }
 
 
@@ -149,6 +162,23 @@ class WorkoutModule:
     # ------------------------------------------------------------------ #
     #  Розбір вправи → групи
     # ------------------------------------------------------------------ #
+
+    def resolve_strict(self, exercise_text: str) -> list:
+        """СТРОГИЙ резолвер для детекції наміру: лише точні збіги ключів
+        EXERCISE_MAP по ЦІЛИХ словах/фразах (без підрядкових збігів, щоб
+        'tomorrow' не матчив 'row'). Використовується перехоплювачем для
+        слабких тригерів (add/plus), де треба впевнено відрізнити тренування
+        від інших команд (add event, add reminder)."""
+        import re as _re
+        t = exercise_text.lower().strip()
+        if t in EXERCISE_MAP:
+            return EXERCISE_MAP[t]
+        hits = []
+        for key, groups in EXERCISE_MAP.items():
+            # ключ має зустрітись як ціле слово/фраза (по межах слів)
+            if _re.search(r"(?<!\w)" + _re.escape(key) + r"(?!\w)", t):
+                hits.extend(groups)
+        return list(dict.fromkeys(hits))
 
     def _resolve_groups(self, exercise_text: str) -> list:
         """Вправа (текст) → список мʼязових груп. Спершу словник, потім LLM."""
@@ -299,6 +329,64 @@ class WorkoutModule:
                 state = "none"      # не замальовано
             result[g] = {"hours": round(hours, 1), "state": state}
         return result
+
+    def get_telegram_report(self) -> str:
+        """Детальний текстовий звіт для Telegram (non-markdown).
+        Групи за станами свіжості + коли востаннє тренувались."""
+        m = self.get_muscle_map()
+        worked = [(g, v) for g, v in m.items() if v["state"] != "none"]
+        if not worked:
+            return "🏋️ WORKOUT MAP\nNo workouts logged in the last 72h, Sir."
+
+        # людські назви груп
+        names = {
+            "chest": "Chest", "abs": "Abs", "obliques": "Obliques",
+            "shoulders": "Shoulders", "biceps": "Biceps", "forearms": "Forearms",
+            "quads": "Quads", "calves_front": "Calves (front)", "traps": "Traps",
+            "lats": "Lats", "lower_back": "Lower back", "rear_delts": "Rear delts",
+            "triceps": "Triceps", "glutes": "Glutes", "hamstrings": "Hamstrings",
+            "calves_back": "Calves (back)",
+        }
+
+        def fmt(group, info):
+            h = info.get("hours")
+            label = names.get(group, group)
+            if h is None:
+                return f"  • {label}"
+            if h < 1:
+                ago = "just now"
+            elif h < 24:
+                ago = f"{int(h)}h ago"
+            else:
+                ago = f"{int(h // 24)}d {int(h % 24)}h ago"
+            return f"  • {label} — {ago}"
+
+        fresh = [(g, v) for g, v in worked if v["state"] == "fresh"]
+        mid = [(g, v) for g, v in worked if v["state"] == "mid"]
+        old = [(g, v) for g, v in worked if v["state"] == "old"]
+
+        lines = ["🏋️ WORKOUT MAP — recent training"]
+        lines.append(f"{len(worked)} muscle groups trained in the last 72h.")
+        if fresh:
+            lines.append("")
+            lines.append("🟢 Fresh (≤24h):")
+            lines.extend(fmt(g, v) for g, v in fresh)
+        if mid:
+            lines.append("")
+            lines.append("🟡 Recovering (≤48h):")
+            lines.extend(fmt(g, v) for g, v in mid)
+        if old:
+            lines.append("")
+            lines.append("🔴 Fading (≤72h):")
+            lines.extend(fmt(g, v) for g, v in old)
+
+        # групи, що давно не тренувались (рекомендація)
+        rested = [names.get(g, g) for g, v in m.items() if v["state"] == "none"]
+        if rested:
+            lines.append("")
+            lines.append(f"💤 Rested / overdue: {', '.join(rested)}")
+
+        return "\n".join(lines)
 
     def get_summary(self) -> str:
         """Короткий підсумок для голосу/Telegram."""

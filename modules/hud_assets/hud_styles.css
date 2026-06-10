@@ -283,14 +283,18 @@
     padding: 0;
   }
 
-  /* Центр: за замовчуванням чат займає ВЕСЬ центр (повний режим).
-     3-колонкова сітка (чат 1/3 + резерв 2/3) вмикається ЛИШЕ в компактному. */
+  /* Центр: за замовчуванням (ПОВНИЙ режим) чат займає ВЕСЬ центр.
+     Сітка зон вмикається ЛИШЕ коли чат згорнутий. */
   .center-grid {
     flex: 1;
     display: flex;            /* повний режим — чат на всю ширину */
     flex-direction: column;
     min-height: 0;
   }
+  /* у повному режимі обгортки прозорі для layout — comm тече як був */
+  .center-col1 { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .center-col2 { display: none; }                 /* друга колонка лише в компактному */
+  .center-col1 .center-slot { display: none; }    /* слоти 2,6 лише в компактному */
 
   .comm-section {
     display: flex;
@@ -300,16 +304,51 @@
     transition: max-height 0.35s ease;
   }
 
-  /* Коли чат згорнутий — перемикаємо центр на сітку 1/3 + 2/3 резерв */
+  /* Коли чат згорнутий — нова сітка центру за схемою:
+     КОЛ.1 (вузька): comm(1) зверху, нижче секції 2 і 6
+     КОЛ.2 (широка): зони 3 (мапа) і 4, рівні по ширині, на всю висоту */
   .center-grid:has(.comm-section.collapsed) {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 16px;
-    align-items: start;
+    grid-template-columns: 280px 1fr;   /* вузька ліва + решта */
+    gap: 14px;
+    height: 100%;
+    min-height: 0;
+    align-items: stretch;
   }
-  .center-grid:has(.comm-section.collapsed) .comm-section {
-    grid-column: 1;
+  .center-grid:has(.comm-section.collapsed) .center-col2 { display: grid; }
+  .center-grid:has(.comm-section.collapsed) .center-col1 .center-slot { display: block; }
+
+  /* КОЛОНКА 1: comm(1) + 2 + 6, одна під одною */
+  .center-grid:has(.comm-section.collapsed) .center-col1 {
+    display: grid;
+    grid-template-rows: auto 1fr 1fr;   /* comm за вмістом, 2 і 6 ділять решту */
+    gap: 14px;
+    min-height: 0;
+  }
+  .center-grid:has(.comm-section.collapsed) .center-col1 .comm-section {
     flex: none;
+    min-height: 0;
+  }
+
+  /* КОЛОНКА 2: одна повна висота (зони 5,7,8 прибрано) */
+  .center-grid:has(.comm-section.collapsed) .center-col2 {
+    display: grid;
+    grid-template-rows: 1fr;
+    min-height: 0;
+  }
+  /* зони 3 і 4 — дві рівні колонки на всю висоту */
+  .center-grid:has(.comm-section.collapsed) .c2-top {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    min-height: 0;
+  }
+
+  /* службовий вигляд порожніх слотів-резервів */
+  .center-grid:has(.comm-section.collapsed) .center-slot {
+    border: 1px dashed var(--hud-accent-faint);
+    border-radius: 4px;
+    min-height: 0;
   }
 
   .comm-title {
@@ -329,12 +368,151 @@
     content: ' ▾';
   }
 
-  /* резерв 2/3 — показуємо лише в компактному режимі */
-  .center-reserve { display: none; }
-  .center-grid:has(.comm-section.collapsed) .center-reserve {
-    display: block;
-    grid-column: 2 / 4;
+  /* мʼязова мапа — зона 3 (перша комірка верхнього рядка колонки 2) */
+  .muscle-map-widget { display: none; }
+  .center-grid:has(.comm-section.collapsed) .muscle-map-widget {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    padding: 10px 12px;                       /* фікс 3: відступи, щоб не впритул */
+    border: 1px dashed var(--hud-accent-faint);
+    border-radius: 4px;
+    box-sizing: border-box;
   }
+  .mm-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .mm-title {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--hud-accent);
+    text-shadow: 0 0 10px var(--hud-glow);
+  }
+  .mm-toggle { display: flex; gap: 4px; }
+  .mm-toggle button {
+    background: var(--hud-accent-faint);
+    border: 1px solid var(--hud-accent-dim);
+    color: var(--hud-accent);
+    padding: 2px 8px;
+    font-family: inherit;
+    font-size: 9px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.2s ease;
+  }
+  .mm-toggle button.active {
+    background: var(--hud-accent);
+    color: #001;
+    box-shadow: 0 0 8px var(--hud-glow);
+  }
+  .mm-svg-holder {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .mm-svg-holder svg { max-height: 100%; max-width: 100%; height: 100%; }
+  /* фікс 2: чорний фон контуру → прозорий. Фон PNG чисто чорний (#000),
+     тому screen-blend робить чорне невидимим, лишаючи блакитні лінії. */
+  .mm-svg-holder image { mix-blend-mode: screen; }
+  .mm-svg-holder .muscle path {
+    fill: #1a2730;
+    fill-opacity: 0.55;
+    transition: fill 0.4s ease;
+  }
+  .mm-svg-holder .muscle { cursor: pointer; }
+  .mm-svg-holder .muscle.fresh path { fill: #00e676; }
+  .mm-svg-holder .muscle.mid path   { fill: #ffd400; }
+  .mm-svg-holder .muscle.old path   { fill: #ff3d3d; }
+  .mm-legend {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 6px;
+    font-size: 12px;
+    letter-spacing: 1px;
+    color: var(--hud-accent-dim);
+  }
+  .mm-legend span { display: flex; align-items: center; gap: 4px; }
+  .mm-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+  /* ---- ARMOR BUILD (зона 4) ---- */
+  .armor-widget { display: none; }
+  .center-grid:has(.comm-section.collapsed) .armor-widget {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    padding: 10px 12px;
+    border: 1px dashed var(--hud-accent-faint);
+    border-radius: 4px;
+    box-sizing: border-box;
+  }
+  .ar-svg-holder {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 6px;
+  }
+  .ar-svg-holder svg { max-height: 100%; max-width: 100%; height: 100%; }
+  /* фон-схема: чорне → прозоре (лінії+очі+реактор світяться) */
+  .ar-svg-holder image { mix-blend-mode: screen; pointer-events: none; }
+
+  /* деталі: за замовчуванням not_printed — без заливки (лише фон-контур) */
+  .ar-svg-holder .armor-part { cursor: pointer; }
+  .ar-svg-holder .armor-part path {
+    fill-opacity: 0;              /* not_printed: невидимо, але площа клікабельна */
+    pointer-events: all;
+    transition: fill-opacity 0.4s ease;
+  }
+  /* done — повний канонічний колір (інлайн fill з data-color через JS) */
+  .ar-svg-holder .armor-part.done path { fill-opacity: 0.92; }
+  /* printing — напівпрозорий + пульсація */
+  .ar-svg-holder .armor-part.printing path {
+    fill-opacity: 0.4;
+    animation: ar-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes ar-pulse {
+    0%, 100% { fill-opacity: 0.18; }
+    50%      { fill-opacity: 0.5; }
+  }
+  .ar-svg-holder .armor-part:hover path { fill-opacity: 1; }
+
+  /* смужка прогресу */
+  .ar-progress { margin-top: 8px; }
+  .ar-progress-bar {
+    height: 8px;
+    background: var(--hud-accent-faint);
+    border: 1px solid var(--hud-accent-dim);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .ar-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #8b1a1a, #b8923a);
+    box-shadow: 0 0 8px var(--hud-glow);
+    transition: width 0.6s ease;
+  }
+  .ar-progress-label {
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--hud-accent-dim);
+    margin-top: 4px;
+  }
+
+  /* (center-reserve прибрано — замінено сіткою зон 2,4,5,6,7,8) */
 
   .messages-container {
     flex: 1;

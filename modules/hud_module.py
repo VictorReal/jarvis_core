@@ -344,14 +344,14 @@ HTML_TEMPLATE = """
         <img id="chart-corr-matrix" alt="Matrix"/>
       </div>
       <div class="chart-card">
-        <div class="chart-title">◈ Normalized Timeline</div>
-        <img id="chart-corr-timeline" alt="Timeline"/>
+        <div class="chart-title">◈ Strongest Link</div>
+        <img id="chart-corr-scatter" alt="Strongest pair scatter"/>
       </div>
     </div>
     <div class="health-charts-grid">
       <div class="chart-card" style="grid-column:1 / -1;">
-        <div class="chart-title">◈ Full Dashboard</div>
-        <img id="chart-corr-dashboard" alt="Dashboard"/>
+        <div class="chart-title">◈ Normalized Timeline</div>
+        <img id="chart-corr-timeline" alt="Timeline"/>
       </div>
     </div>
 
@@ -525,12 +525,53 @@ HTML_TEMPLATE = """
   <!-- CENTER -->
   <div class="panel center-panel">
     <div class="center-grid">
-      <div class="comm-section" id="comm-section">
-        <div class="panel-title comm-title" onclick="toggleCommLog()" title="Click to collapse / expand">◈ Communication Log</div>
-        <div class="messages-container" id="messages"></div>
+      <!-- КОЛОНКА 1 (вузька): Communication Log (1) + секції 2 і 6 -->
+      <div class="center-col1">
+        <div class="comm-section" id="comm-section">
+          <div class="panel-title comm-title" onclick="toggleCommLog()" title="Click to collapse / expand">◈ Communication Log</div>
+          <div class="messages-container" id="messages"></div>
+        </div>
+        <div class="center-slot slot-2" id="center-slot-2"></div>
+        <div class="center-slot slot-6" id="center-slot-6"></div>
       </div>
-      <!-- праві 2/3 — резерв під майбутні секції -->
-      <div class="center-reserve"></div>
+
+      <!-- КОЛОНКА 2 (широка): зони 3 (мапа) і 4, рівні по ширині, на всю висоту -->
+      <div class="center-col2">
+        <div class="c2-top">
+          <!-- зона 3 — мʼязова мапа -->
+          <div class="muscle-map-widget" id="muscle-map-widget">
+            <div class="mm-header">
+              <span class="mm-title">◈ MUSCLE MAP</span>
+              <div class="mm-toggle">
+                <button id="mm-btn-front" class="active" onclick="setMuscleView('front')">FRONT</button>
+                <button id="mm-btn-back" onclick="setMuscleView('back')">BACK</button>
+                <button id="mm-btn-tg" onclick="sendWorkoutToTelegram()" title="Send to Telegram">✈</button>
+              </div>
+            </div>
+            <div class="mm-svg-holder" id="mm-svg-holder"></div>
+            <div class="mm-legend">
+              <span><i class="mm-dot" style="background:#00e676"></i>≤24h</span>
+              <span><i class="mm-dot" style="background:#ffd400"></i>≤48h</span>
+              <span><i class="mm-dot" style="background:#ff3d3d"></i>≤72h</span>
+              <span><i class="mm-dot" style="background:#1a2730"></i>rest</span>
+            </div>
+          </div>
+          <div class="armor-widget" id="armor-widget">
+            <div class="mm-header">
+              <span class="mm-title">◈ ARMOR BUILD</span>
+              <div class="mm-toggle">
+                <button id="ar-btn-front" class="active" onclick="setArmorView('front')">FRONT</button>
+                <button id="ar-btn-back" onclick="setArmorView('back')">BACK</button>
+              </div>
+            </div>
+            <div class="ar-svg-holder" id="ar-svg-holder"></div>
+            <div class="ar-progress">
+              <div class="ar-progress-bar"><div class="ar-progress-fill" id="ar-progress-fill"></div></div>
+              <div class="ar-progress-label" id="ar-progress-label">0% — 0/28 parts</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -663,6 +704,18 @@ except Exception as e:
     print(f"[HUD] Correlation routes не зареєстровані: {e}")
 
 try:
+    from modules.workout_endpoints import register_workout_routes
+    register_workout_routes(app)
+except Exception as e:
+    print(f"[HUD] Workout routes не зареєстровані: {e}")
+
+try:
+    from modules.armor_endpoints import register_armor_routes
+    register_armor_routes(app)
+except Exception as e:
+    print(f"[HUD] Armor routes не зареєстровані: {e}")
+
+try:
     from modules.boot_animation import register_boot
     register_boot(app)
 except Exception as e:
@@ -684,6 +737,22 @@ def _hud_script():
     from flask import Response
     with open(_os.path.join(_ASSETS_DIR, "hud_script.js"), encoding="utf-8") as f:
         return Response(f.read(), mimetype="application/javascript")
+
+
+@app.route('/muscle_map.svg')
+def _muscle_map_svg():
+    # Статичний SVG мʼязової мапи (front+back шари). Лежить у hud_assets.
+    from flask import Response
+    with open(_os.path.join(_ASSETS_DIR, "muscle_map.svg"), encoding="utf-8") as f:
+        return Response(f.read(), mimetype="image/svg+xml")
+
+
+@app.route('/armor_map.svg')
+def _armor_map_svg():
+    # Статичний SVG броні (front-шар + деталі). Лежить у hud_assets.
+    from flask import Response
+    with open(_os.path.join(_ASSETS_DIR, "armor_map.svg"), encoding="utf-8") as f:
+        return Response(f.read(), mimetype="image/svg+xml")
 
 
 @app.route('/')

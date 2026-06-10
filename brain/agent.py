@@ -521,6 +521,8 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
     def add_calendar_event(title: str, date: str, time: str = "",
                            duration_minutes: int = 60, location: str = "") -> str:
         """Add event to Google Calendar. Use when user says add event, schedule meeting, remind me on date.
+        Do NOT use this for workouts / training logs (e.g. 'add workout', 'тренування',
+        'I trained ...') — those go to log_workout, even if phrased with 'add' or a past time.
         title: event name.
         date: can be 'YYYY-MM-DD' or natural language like 'tomorrow', 'next monday', 'in 3 days', 'friday'.
         time: 'HH:MM' (24h) or natural like '3pm', '9:30am'. If empty, defaults to 12:00.
@@ -800,6 +802,65 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         return cross_correlation_report_tool(send_telegram=True)
 
     # ------------------------------------------------------------------ #
+    #  Workout (силові тренування + мʼязова мапа)                         #
+    # ------------------------------------------------------------------ #
+    @tool
+    def log_workout(exercise: str) -> str:
+        """Record that the user TRAINED specific muscles, to light up the HUD muscle map.
+        This is NOT a calendar event and has NOTHING to do with scheduling — never use
+        add_calendar_event for workouts. ALWAYS use this tool for ANY phrasing about
+        training muscles, including imperative ones:
+          'add workout shoulders, chest', 'log workout legs', 'workout: bench press, rows',
+          'тренування: груди, трицепс', 'додай тренування ноги', 'залогуй тренування присідання',
+          'я тренував спину', 'I trained chest today', 'I did bench press and squats'.
+        Even if the user says 'add' or gives a past time like '2 hours ago', it is still a
+        workout LOG, not a calendar entry. Accepts multiple exercises/muscles in one string
+        (comma / 'i' / 'та' / 'and' separated), Ukrainian or English, exercise names or
+        muscle-group names.
+        Args:
+            exercise: the exercise(s) or muscle group(s) the user trained.
+        """
+        from modules.workout_module import get_workout
+        return get_workout(llm=llm).log_workout(exercise)
+
+    @tool
+    def workout_stats(reason: str = "") -> str:
+        """Report which muscle groups were trained recently and their freshness
+        (trained in last 24h / 48h / 72h). Use when the user asks what they trained,
+        which muscles are fresh/recovered, 'what did I train this week', 'muscle map status',
+        'які мʼязи я качав', 'що сьогодні тренував'."""
+        from modules.workout_module import get_workout
+        return get_workout(llm=llm).get_summary()
+
+    # ------------------------------------------------------------------ #
+    #  ARMOR BUILD — трекер 3D-друку броні (НЕ фізичне open/close armor)  #
+    # ------------------------------------------------------------------ #
+    @tool
+    def armor_build_status(part: str, status: str) -> str:
+        """Set the 3D-PRINT build status of an Iron Man armor part on the HUD armor tracker.
+        This is about PRINTING/BUILDING the cosplay suit, NOT opening/closing a worn suit
+        (that's open_armor/close_armor). Use for phrasing like:
+          'armor chest done', 'armor helmet printing', 'mark the left thigh as done',
+          'set biceps to not printed', 'armor legs done'.
+        Args:
+            part: armor part name (helmet, chest, neck, abs, cod, shoulders, arms, biceps,
+                  triceps, forearms, thighs, knees, shins, feet, upperback, legs, etc).
+            status: one of 'done', 'printing', 'not_printed' (synonyms: ready/finished=done,
+                    todo/pending/reset=not_printed).
+        """
+        from modules.armor_module import get_armor
+        return get_armor().command(part, status)
+
+    @tool
+    def armor_build_progress(reason: str = "") -> str:
+        """Report overall Iron Man armor BUILD progress (how much of the suit is 3D-printed):
+        percent complete, parts done/total, parts currently printing. Use when the user asks
+        'how's the armor coming along', 'suit build progress', 'how much of the Mark is done',
+        'скільки броні готово', 'як просувається костюм'."""
+        from modules.armor_module import get_armor
+        return get_armor().get_summary()
+
+    # ------------------------------------------------------------------ #
     #  RAG по логах (семантичний пошук по історії)                        #
     # ------------------------------------------------------------------ #
     @tool
@@ -842,6 +903,8 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         money_report, money_report_to_telegram,
         log_mood, mood_report, mood_report_to_telegram,
         cross_correlation_report, cross_correlation_to_telegram,
+        log_workout, workout_stats,
+        armor_build_status, armor_build_progress,
         search_my_history, reindex_history
     ]
 
@@ -1021,6 +1084,166 @@ class JarvisAgent:
         #    ніж відправити запит-на-дію в балачку й отримати галюцинацію.
         return "tools"
 
+    def _maybe_armor(self, user_input: str):
+        """Детермінований роутер команд трекера збірки броні.
+        Повертає рядок-відповідь, якщо це про armor build, інакше None.
+        Обходить ненадійний tool-selection моделі (галюцинувала 'done' без виклику)."""
+        import re as _re
+        text = user_input.lower().strip()
+
+        # --- запит прогресу збірки ---
+        PROGRESS_HINTS = (
+            "armor progress", "suit progress", "suit build", "armor build status",
+            "how's the armor", "hows the armor", "how is the armor",
+            "how's the suit", "hows the suit", "how much of the mark",
+            "how much armor", "mark progress",
+            "скільки броні", "прогрес броні", "як просувається костюм",
+            "стан броні", "скільки костюма",
+        )
+        if any(h in text for h in PROGRESS_HINTS):
+            try:
+                return str(self.tools_map["armor_build_progress"].invoke({"reason": ""}))
+            except Exception as e:
+                print(f"[ARMOR] progress error: {e}")
+                return None
+
+        # --- встановлення статусу деталі ---
+        # тригер: команда має згадувати armor/броню/сут-білд
+        if not any(t in text for t in ("armor", "броня", "броні", "suit", "костюм", "mark suit")):
+            return None
+
+        # визначаємо статус
+        status = None
+        if any(w in text for w in ("done", "ready", "finished", "complete", "готов", "надрукован", "надрукував")):
+            status = "done"
+        elif any(w in text for w in ("printing", "in progress", "друку", "печат")):
+            status = "printing"
+        elif any(w in text for w in ("not printed", "not_printed", "todo", "pending", "reset",
+                                      "not done", "не надрукован", "не готов", "скинь")):
+            status = "not_printed"
+        if status is None:
+            return None  # armor згадано, але без статусу → хай іде на модель/прогрес
+
+        # витягуємо назву деталі: прибираємо armor-слова й статус-слова
+        from modules.armor_module import get_armor
+        cleaned = text
+        JUNK = (
+            "armor build", "mark suit", "armor", "suit", "костюм", "броня", "броню", "броні", "mark",
+            "done", "ready", "finished", "complete", "готово", "готова", "готовий",
+            "надрукований", "надрукована", "надрукував", "printing", "in progress",
+            "друкується", "друкую", "печатається", "not printed", "not_printed",
+            "todo", "pending", "reset", "not done", "не надруковано", "не готово", "скинь",
+            "set", "mark", "as", "the", "to", "is", "now", "встанови", "постав", "признач",
+            "in", "of", "my", "please", "for", "on", "a", "an", "будь", "ласка",
+        )
+        for j in sorted(JUNK, key=len, reverse=True):
+            cleaned = _re.sub(r"(?<!\w)" + _re.escape(j) + r"(?!\w)", " ", cleaned)
+        cleaned = _re.sub(r"\s+", " ", cleaned).strip(" ,;:.-")
+
+        if not cleaned:
+            return ("Armor noted, Sir, but which part? "
+                    "Tell me e.g. 'armor chest done'.")
+
+        # перевіряємо, чи це реальна деталь
+        ids = get_armor().resolve_parts(cleaned)
+        if not ids:
+            return None  # не впізнали деталь → не наша команда
+
+        try:
+            return str(self.tools_map["armor_build_status"].invoke(
+                {"part": cleaned, "status": status}))
+        except Exception as e:
+            print(f"[ARMOR] status error: {e}")
+            return None
+
+    def _maybe_workout(self, user_input: str):
+        """Детермінований роутер workout-команд. Повертає рядок-відповідь,
+        якщо це явно про тренування, інакше None.
+        Обходить ненадійний tool-selection моделі (scout галюцинує лог)."""
+        import re as _re
+        text = user_input.lower().strip()
+
+        # --- 1) запит статистики ("що я тренував", "які мʼязи свіжі") ---
+        STAT_HINTS = (
+            "what did i train", "what have i trained", "which muscles",
+            "muscle map status", "workout stats", "workout status",
+            "що я тренував", "що тренував", "які мʼязи", "які м'язи",
+            "що качав", "які мязи", "стан мапи", "статус тренувань",
+        )
+        if any(h in text for h in STAT_HINTS):
+            try:
+                return str(self.tools_map["workout_stats"].invoke({"reason": ""}))
+            except Exception as e:
+                print(f"[WORKOUT] stats error: {e}")
+                return None
+
+        # --- 2) лог тренування ---
+        # тригер-слова, що ОДНОЗНАЧНО вмикають режим логування
+        LOG_TRIGGERS = (
+            "workout", "trained", "i did", "worked out", "log workout",
+            "add workout", "exercise", "exercises",
+            "тренув", "тренуванн", "залогуй тренув", "качав", "накачав",
+            "позанімав", "робив вправ", "зробив вправ",
+        )
+        # слабкі тригери-дієслова (add/log/plus/додай) — спрацьовують лише якщо
+        # рештою тексту є РЕАЛЬНА вправа/мʼязова група (перевіряємо модулем нижче)
+        WEAK_TRIGGERS = (
+            "add ", "log ", "plus ", "also ", "and ",
+            "додай", "плюс", "ще ", "також",
+        )
+        has_strong = any(t in text for t in LOG_TRIGGERS)
+        has_weak = any(t in text for t in WEAK_TRIGGERS)
+        if not has_strong and not has_weak:
+            return None
+
+        # вирізаємо службові префікси/слова, лишаємо тільки назви вправ/мʼязів.
+        # ВАЖЛИВО: чистимо лише ЦІЛІ слова/фрази (по межах), щоб не зʼїсти
+        # підрядок усередині слова (напр. 'це' всередині 'біцепс').
+        cleaned = text
+        JUNK_PHRASES = (
+            "i had a workout", "i had workout", "i did a workout",
+            "i worked out", "log my workout", "log workout",
+            "add a workout", "add workout", "my workout was",
+            "залогуй тренування", "додай тренування",
+            "i had", "i did", "workout", "today", "just now", "earlier",
+            "залогуй", "додай", "я тренував", "тренував", "я качав",
+            "накачав", "качав", "тренувався", "тренувалася", "тренуюсь",
+            "потренував", "сьогодні", "щойно", "були", "було",
+            "its", "it's", "it is", "це",
+            # слабкі дієслова-додавання теж прибираємо з тексту вправи
+            "add", "log", "plus", "also", "and", "плюс", "ще", "також", "some",
+        )
+        # довші фрази — першими, щоб не лишати хвости
+        for junk in sorted(JUNK_PHRASES, key=len, reverse=True):
+            cleaned = _re.sub(r"(?<!\w)" + _re.escape(junk) + r"(?!\w)", " ", cleaned)
+        # прибираємо сполучники-розриви на краях і зайві коми/пробіли
+        cleaned = _re.sub(r"\s+", " ", cleaned).strip(" ,;:.-")
+
+        if not cleaned:
+            if has_strong:
+                # тригер є, але без конкретики ("я тренувався") — попросимо уточнити
+                return ("Logged intent noted, Sir, but which muscles? "
+                        "Tell me e.g. 'chest and triceps'.")
+            return None  # лише слабкий тригер без вправи → не наша команда
+
+        # Якщо тригер був СЛАБКИЙ (add/plus) — лог робимо ТІЛЬКИ якщо текст
+        # реально резолвиться в мʼязові групи (інакше це не про тренування,
+        # напр. "add event", "add reminder" — хай іде на модель/інші тули).
+        if not has_strong:
+            try:
+                from modules.workout_module import get_workout
+                test_groups = get_workout().resolve_strict(cleaned)
+            except Exception:
+                test_groups = []
+            if not test_groups:
+                return None
+
+        try:
+            return str(self.tools_map["log_workout"].invoke({"exercise": cleaned}))
+        except Exception as e:
+            print(f"[WORKOUT] log error: {e}")
+            return None
+
     def ask(self, user_input: str, lang: str = "en") -> str:
         base_prompt = ULTRON_PROMPT if self.active_mode == "ultron" else SYSTEM_PROMPT
         lang_instruction = (
@@ -1051,6 +1274,24 @@ class JarvisAgent:
             + f" People you know: {people_context}."
             + (f" {memory_context}" if memory_context else "")
         )
+
+        # ── Детермінований перехоплювач WORKOUT ──────────────────────────
+        # llama-4-scout часто ігнорує log_workout і галюцинує "залоговано" текстом.
+        # Тому workout-команди ловимо тут напряму й кличемо тул без участі моделі.
+        # Те саме для armor build (галюцинувала 'done' без виклику тула).
+        ar = self._maybe_armor(user_input)
+        if ar is not None:
+            self.chat_history.append(HumanMessage(content=user_input))
+            self.chat_history.append(AIMessage(content=ar))
+            save_history(self.chat_history)
+            return ar
+
+        wk = self._maybe_workout(user_input)
+        if wk is not None:
+            self.chat_history.append(HumanMessage(content=user_input))
+            self.chat_history.append(AIMessage(content=wk))
+            save_history(self.chat_history)
+            return wk
 
         # ── MoE-роутер ───────────────────────────────────────────────────
         # Для ultron не маршрутизуємо (характер тримаємо на основній моделі).

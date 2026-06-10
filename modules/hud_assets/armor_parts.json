@@ -1,0 +1,293 @@
+[
+  {
+    "id": "abs",
+    "color": "red",
+    "sides": [
+      "front"
+    ],
+    "electro": false
+  },
+  {
+    "id": "chest",
+    "color": "red",
+    "sides": [
+      "front"
+    ],
+    "electro": false
+  },
+  {
+    "id": "cod",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "helmet_chin",
+    "color": "gold",
+    "sides": [
+      "front"
+    ],
+    "electro": false
+  },
+  {
+    "id": "helmet_top",
+    "color": "red",
+    "sides": [
+      "front"
+    ],
+    "electro": false
+  },
+  {
+    "id": "helmet_faceplate",
+    "color": "gold",
+    "sides": [
+      "front"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_arm",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_biceps",
+    "color": "silver",
+    "sides": [
+      "front"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_foot",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_forearm",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_knee",
+    "color": "silver",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_shoulder",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_thigh",
+    "color": "gold",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_triceps",
+    "color": "gold",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_upperback",
+    "color": "red",
+    "sides": [
+      "front"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_shin",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "neck",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_arm",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_biceps",
+    "color": "silver",
+    "sides": [
+      "front"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_foot",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_forearm",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_knee",
+    "color": "silver",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_shin",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_shoulder",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_thigh",
+    "color": "gold",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_triceps",
+    "color": "gold",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_upperback",
+    "color": "red",
+    "sides": [
+      "front"
+    ],
+    "electro": false
+  },
+  {
+    "id": "upperthigh",
+    "color": "red",
+    "sides": [
+      "front",
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "back",
+    "color": "red",
+    "sides": [
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "lowback",
+    "color": "red",
+    "sides": [
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "midback",
+    "color": "gold",
+    "sides": [
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "helmet",
+    "color": "red",
+    "sides": [
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "left_elbow",
+    "color": "red",
+    "sides": [
+      "back"
+    ],
+    "electro": false
+  },
+  {
+    "id": "right_elbow",
+    "color": "red",
+    "sides": [
+      "back"
+    ],
+    "electro": false
+  }
+]

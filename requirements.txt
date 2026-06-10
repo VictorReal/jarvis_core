@@ -25,3 +25,5 @@ dateparser
 feedparser
 sentence-transformers
 chromadb
+cairosvg
+mediapipe

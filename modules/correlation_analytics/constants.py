@@ -10,6 +10,8 @@ METRICS = {
     "resting_hr": "Resting HR",
     "mood":       "Mood",
     "spending":   "Spending",
+    "workout":    "Workout",
+    "alcohol":    "Alcohol",
 }
 
 # Кольори (узгоджено з HUD / health visualizer)
@@ -25,6 +27,8 @@ COLORS = {
     "green":  "#00ff88",
     "orange": "#ff9500",
     "red":    "#ff3b30",
+    "yellow": "#ffd400",
+    "pink":   "#ff5dbb",
 }
 
 # Поріг |r|, вище якого зв'язок вважаємо вартим уваги у висновках
@@ -67,5 +71,39 @@ PAIR_INSIGHTS = {
     ("resting_hr", "mood"): (
         "Higher resting HR goes with higher mood.",
         "Higher resting HR (stress/fatigue) goes with lower mood.",
+    ),
+    # --- Тренування ---
+    ("workout", "sleep_h"): (
+        "On workout days you tend to sleep more — training aids sleep.",
+        "On workout days you tend to sleep less — watch recovery.",
+    ),
+    ("workout", "mood"): (
+        "Workout days come with better mood — training lifts you.",
+        "Workout days come with lower mood — possibly over-training.",
+    ),
+    ("workout", "resting_hr"): (
+        "Workout days show higher resting HR (training load).",
+        "Workout days show lower resting HR — good cardiovascular sign.",
+    ),
+    ("workout", "steps"): (
+        "Workout days are also higher-step days, as expected.",
+        "Workout days have fewer steps — gym over walking.",
+    ),
+    ("workout", "alcohol"): (
+        "You drink more on workout days — worth a glance.",
+        "You drink less on workout days — training displaces drinking.",
+    ),
+    # --- Алкоголь ---
+    ("alcohol", "sleep_h"): (
+        "More drinking goes with more time in bed — but not better sleep.",
+        "More drinking goes with less sleep — alcohol shortens your night.",
+    ),
+    ("alcohol", "mood"): (
+        "Higher drinking days go with higher mood (short-term).",
+        "Higher drinking days go with lower mood — possible after-effect.",
+    ),
+    ("alcohol", "resting_hr"): (
+        "More drinking goes with higher resting HR — alcohol stresses the heart.",
+        "More drinking goes with lower resting HR.",
     ),
 }

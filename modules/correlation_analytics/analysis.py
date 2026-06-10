@@ -131,6 +131,25 @@ def insights(df: pd.DataFrame) -> list[str]:
                     f"(r={nxt} vs {same}) — protect your sleep for tomorrow."
                 )
 
+    # Лаговий ефект тренування на сон тієї ж ночі та настрій наступного дня
+    if "workout" in df.columns:
+        if "sleep_h" in df.columns:
+            wl = lagged_correlation(df, "workout", "sleep_h", max_lag=1)
+            r0 = wl.get(0)
+            if r0 is not None and abs(r0) >= CORR_NOTABLE:
+                if r0 > 0:
+                    out.append(f"Training days lead to more sleep that night (r={r0}).")
+                else:
+                    out.append(f"Training days lead to less sleep that night (r={r0}) — mind recovery.")
+        if "mood" in df.columns:
+            wm = lagged_correlation(df, "workout", "mood", max_lag=1)
+            nxt = wm.get(1)
+            if nxt is not None and abs(nxt) >= CORR_NOTABLE:
+                if nxt > 0:
+                    out.append(f"Mood is higher the day after training (r={nxt}).")
+                else:
+                    out.append(f"Mood dips the day after training (r={nxt}) — possible fatigue.")
+
     if not out:
         out.append("No strong cross-metric patterns yet — keep logging for clearer signals, Sir.")
     return out

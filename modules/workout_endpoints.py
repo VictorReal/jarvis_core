@@ -55,13 +55,22 @@ def register_workout_routes(app):
 
     @app.route("/api/workout/telegram", methods=["POST"])
     def _workout_telegram():
-        # Надсилає короткий підсумок у Telegram (тим самим Bot-патерном, що health/money).
+        # Надсилає детальний підсумок + PNG мапи у Telegram (money-патерн).
         try:
             from modules.workout_module import get_workout
             w = get_workout()
-            summary = w.get_summary()
-            sent = _send_telegram(summary)
-            return jsonify({"ok": sent, "summary": summary})
+            text = w.get_telegram_report()
+            # рендеримо PNG мапи (front+back з кольорами станів)
+            png_bytes = None
+            try:
+                from modules.workout_visualizer import render_map_png
+                png_bytes = render_map_png(w.get_muscle_map())
+                logger.info(f"[WORKOUT] PNG згенеровано ({len(png_bytes)} байт)")
+            except Exception as e:
+                import traceback
+                logger.warning(f"[WORKOUT] PNG render error: {e}\n{traceback.format_exc()}")
+            sent = _send_telegram(text, png_bytes)
+            return jsonify({"ok": sent, "summary": text})
         except Exception as e:
             logger.warning(f"[WORKOUT] telegram endpoint error: {e}")
             return jsonify({"ok": False, "error": str(e)}), 500
@@ -69,19 +78,46 @@ def register_workout_routes(app):
     logger.info("[WORKOUT] HUD-роути зареєстровані")
 
 
-def _send_telegram(text: str) -> bool:
-    """Надсилає текст власнику в Telegram. Бере токен/chat_id з .env
-    (як money/health notify_owner). Якщо не налаштовано — тихо False."""
+def _send_telegram(text: str, png_bytes: bytes = None) -> bool:
+    """Надсилає текст (+опційно PNG) власнику в Telegram.
+    Патерн money: TELEGRAM_TOKEN + TELEGRAM_USER_ID, async через Bot."""
+    import os
+    token = os.getenv("TELEGRAM_TOKEN")
     try:
-        import os
-        token = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
-        chat_id = os.getenv("TELEGRAM_OWNER_ID") or os.getenv("TELEGRAM_CHAT_ID")
-        if not token or not chat_id:
-            logger.warning("[WORKOUT] Telegram не налаштований (.env)")
-            return False
-        from telegram import Bot
-        Bot(token).send_message(chat_id=chat_id, text=f"🏋️ {text}")
-        return True
-    except Exception as e:
-        logger.warning(f"[WORKOUT] Telegram send error: {e}")
+        user_id = int(os.getenv("TELEGRAM_USER_ID", "0"))
+    except ValueError:
+        user_id = 0
+    if not token or not user_id:
+        logger.warning("[WORKOUT] TELEGRAM_TOKEN/USER_ID не задано")
         return False
+
+    import asyncio
+    import threading
+
+    async def _send():
+        try:
+            from telegram import Bot
+            bot = Bot(token=token)
+            if png_bytes:
+                import tempfile, os as _os
+                tmp = _os.path.join(tempfile.gettempdir(), "workout_map.png")
+                with open(tmp, "wb") as f:
+                    f.write(png_bytes)
+                with open(tmp, "rb") as photo:
+                    await bot.send_photo(chat_id=user_id, photo=photo,
+                                         caption="🏋️ Workout Map")
+            # текст окремо (Telegram caption має ліміт 1024)
+            for i in range(0, len(text), 4000):
+                await bot.send_message(chat_id=user_id, text=text[i:i + 4000])
+            logger.info("[WORKOUT] Telegram надіслано")
+        except Exception as e:
+            logger.error(f"[WORKOUT] Telegram error: {e}")
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_send())
+        loop.close()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True

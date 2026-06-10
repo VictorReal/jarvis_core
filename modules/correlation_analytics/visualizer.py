@@ -40,7 +40,7 @@ def plot_matrix(df: pd.DataFrame, title="Correlation Matrix", path=None) -> byte
     """Теплова карта кореляцій."""
     _style()
     corr = an.correlation_matrix(df)
-    fig, ax = plt.subplots(figsize=(6.5, 5.5))
+    fig, ax = plt.subplots(figsize=(6, 5))
     if corr.empty:
         ax.text(0.5, 0.5, "Not enough data", color=COLORS["text"],
                 ha="center", va="center", transform=ax.transAxes)
@@ -57,7 +57,7 @@ def plot_matrix(df: pd.DataFrame, title="Correlation Matrix", path=None) -> byte
                 ax.text(j, i, f"{v:.2f}", ha="center", va="center",
                         color="black", fontweight="bold", fontsize=9)
     ax.set_title(title)
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
     return _save(fig, path)
 
@@ -65,7 +65,7 @@ def plot_matrix(df: pd.DataFrame, title="Correlation Matrix", path=None) -> byte
 def plot_scatter(df: pd.DataFrame, x: str, y: str, path=None) -> bytes:
     """Scatter двох метрик + лінія тренду."""
     _style()
-    fig, ax = plt.subplots(figsize=(6, 4.5))
+    fig, ax = plt.subplots(figsize=(6, 5))
     pair = df[[x, y]].dropna()
     if len(pair) < 3:
         ax.text(0.5, 0.5, "Not enough overlap", color=COLORS["text"],
@@ -91,7 +91,7 @@ def plot_timeline(df: pd.DataFrame, path=None) -> bytes:
         ax.text(0.5, 0.5, "No data", color=COLORS["text"],
                 ha="center", va="center", transform=ax.transAxes)
         ax.axis("off"); return _save(fig, path)
-    palette = [COLORS["cyan"], COLORS["purple"], COLORS["green"], COLORS["orange"], COLORS["red"]]
+    palette = [COLORS["cyan"], COLORS["purple"], COLORS["green"], COLORS["orange"], COLORS["red"], COLORS["yellow"], COLORS["pink"]]
     for i, col in enumerate(df.columns):
         s = df[col].dropna()
         if s.std() and len(s) > 2:
@@ -130,7 +130,7 @@ def plot_dashboard(df: pd.DataFrame, path=None) -> bytes:
 
     # timeline (верх-право)
     ax2 = fig.add_subplot(2, 2, 2)
-    palette = [COLORS["cyan"], COLORS["purple"], COLORS["green"], COLORS["orange"], COLORS["red"]]
+    palette = [COLORS["cyan"], COLORS["purple"], COLORS["green"], COLORS["orange"], COLORS["red"], COLORS["yellow"], COLORS["pink"]]
     for i, col in enumerate(df.columns):
         s = df[col].dropna()
         if s.std() and len(s) > 2:

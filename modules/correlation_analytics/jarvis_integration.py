@@ -87,6 +87,12 @@ def render_chart(panel: str) -> bytes:
         return viz.plot_timeline(df)
     if panel == "dashboard":
         return viz.plot_dashboard(df)
+    if panel == "scatter":
+        # голий scatter — найсильніша пара
+        pairs = an.strongest_pairs(df, top=1)
+        if pairs:
+            return viz.plot_scatter(df, pairs[0]["a"], pairs[0]["b"])
+        return viz.plot_matrix(df)
     if panel.startswith("scatter:"):
         # формат scatter:a,b
         try:

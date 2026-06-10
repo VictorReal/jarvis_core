@@ -17,6 +17,8 @@ from day_logger import log_exchange
 from morning_briefing import MorningBriefing
 from calendar_notifier import CalendarNotifier
 from gmail_notifier import GmailNotifier
+from modules.camera_vision import CameraVision
+from modules.gesture_controller import GestureController
 
 
 # ── Прогрів важкого імпорту brain.processor (LangChain ~7с) у фоні ──────
@@ -129,6 +131,25 @@ class Jarvis:
         self.spotify_poller = SpotifyPoller(self.brain.music_module, poll_interval=2)
         self.spotify_poller.start()
         print("[JARVIS] Spotify polling запущено")
+
+        # ── Зір + жести (камера → керування музикою) ──────────────────
+        # Обгорнуто в try: якщо USB-камера відʼєднана або mediapipe
+        # недоступний — JARVIS працює далі без зору, не падає.
+        self.camera_vision = None
+        self.gesture_controller = None
+        try:
+            from modules.hud_module import log_activity
+            self.camera_vision = CameraVision(camera_index=0, draw_preview=True)
+            self.camera_vision.start()
+            self.gesture_controller = GestureController(
+                self.camera_vision,
+                self.brain.music_module,
+                hud_callback=log_activity,
+            )
+            self.gesture_controller.start()
+            print("[JARVIS] Зір + жести запущено")
+        except Exception as e:
+            print(f"[JARVIS] Зір недоступний (працюємо без камери): {e}")
 
         # Morning Briefing
         self.briefing = MorningBriefing(

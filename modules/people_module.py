@@ -53,12 +53,15 @@ def save_profile(profile: dict) -> bool:
         logger.error(f"Помилка збереження профілю: {e}")
         return False
 
-def create_profile(name: str, relationship: str = "friend", personality: str = "polite") -> dict:
+def create_profile(name: str, relationship: str = "friend", personality: str = "polite", birth_date: str = "01.01.2000", location: str= "city", occupations: str = "jobless") -> dict:
     """Створює новий профіль."""
     profile = {
         "name": name.capitalize(),
+        "birth_date": birth_date,
         "relationship": relationship,
         "personality_toward": personality,
+        "occupations": occupations,
+        "location": location,
         "facts": [],
         "first_met": datetime.now().isoformat(),
         "last_seen": datetime.now().isoformat(),
@@ -98,16 +101,34 @@ def find_profile_by_name(name: str) -> dict | None:
 def get_profiles_summary() -> str:
     """
     Повертає короткий опис всіх знайомих — для контексту LLM.
-    Наприклад: 'Alex (friend): likes cars, programming. Maria (colleague): likes art.'
+    Замінено relationship на location -> residence, а occupations обмежено 1 останнім записом.
     """
     profiles = get_all_profiles()
     if not profiles:
         return "No people in memory yet."
 
-    parts = []
-    for p in profiles:
-        facts_str = ", ".join(p.get("facts", [])[:5])  # максимум 5 фактів
-        parts.append(
-            f"{p['name']} ({p.get('relationship', 'unknown')}): {facts_str or 'no facts yet'}"
-        )
-    return " | ".join(parts)
+    summary = []
+    for profile in profiles:
+        name = profile.get("name", "Unknown")
+        
+        # 1. Заміна relationship на location -> residence
+        location = profile.get("location", {})
+        if isinstance(location, dict):
+            residence = location.get("residence", "Unknown residence")
+        else:
+            residence = location or "Unknown residence"
+        
+        # 2. Беремо не більше 1 останнього рядка з occupations
+        occupations = profile.get("occupations", [])
+        if isinstance(occupations, list) and occupations:
+            last_occupation = occupations[-1]
+        elif isinstance(occupations, str) and occupations:
+            last_occupation = occupations
+        else:
+            last_occupation = "No occupation"
+        
+        # Формуємо новий компактний вивід для кожного профілю
+        summary.append(f"{name} ({residence}): {last_occupation}")
+        
+    # Повертаємо одним рядком через розділювач, як було у твоїй початковій логіці
+    return " | ".join(summary)
