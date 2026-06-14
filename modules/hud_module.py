@@ -532,7 +532,17 @@ HTML_TEMPLATE = """
           <div class="messages-container" id="messages"></div>
         </div>
         <div class="center-slot slot-2" id="center-slot-2"></div>
-        <div class="center-slot slot-6" id="center-slot-6"></div>
+        <div class="center-slot slot-6" id="center-slot-6">
+          <div class="cam-widget" id="cam-widget">
+            <div class="cam-header">
+              <span class="cam-title">◈ VISION</span>
+              <button class="cam-fs-btn" id="cam-fs-btn" onclick="toggleCameraFullscreen()" title="Fullscreen camera">⤢</button>
+            </div>
+            <div class="cam-holder">
+              <img id="cam-stream" class="cam-stream" alt="camera" />
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- КОЛОНКА 2 (широка): зони 3 (мапа) і 4, рівні по ширині, на всю висоту -->
@@ -739,6 +749,27 @@ def _hud_script():
         return Response(f.read(), mimetype="application/javascript")
 
 
+# ── Камера: реєстрація інстансу + роут кадру для HUD ───────────────────
+_camera_vision = None
+
+def set_camera_vision(cam):
+    """main викликає це, щоб HUD міг віддавати кадри камери у браузер."""
+    global _camera_vision
+    _camera_vision = cam
+
+@app.route('/camera/frame')
+def _camera_frame():
+    """Повертає останній JPEG-кадр камери. HTML <img> перезавантажує його по таймеру."""
+    from flask import Response
+    if _camera_vision is None:
+        return Response(b"", status=503)
+    jpeg = _camera_vision.get_jpeg()
+    if not jpeg:
+        return Response(b"", status=503)
+    return Response(jpeg, mimetype="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
 @app.route('/muscle_map.svg')
 def _muscle_map_svg():
     # Статичний SVG мʼязової мапи (front+back шари). Лежить у hud_assets.
@@ -896,6 +927,18 @@ def update_hud(key: str, value):
     """Оновлює одне поле HUD і надсилає всім клієнтам."""
     hud_state[key] = value
     socketio.emit('state_update', {key: value})
+
+
+def trigger_wake_scene():
+    """Запускає кінематографічну анімацію пробудження у фронті.
+    Фронт слухає подію 'wake_scene' (playWakeScene у hud_script.js)."""
+    socketio.emit('wake_scene', {})
+
+
+def gesture_media(action: str):
+    """Жест медіа (toggle/next/previous) → фронт сам вирішує:
+    керувати активним YouTube чи музикою (Spotify)."""
+    socketio.emit('gesture_media', {'action': action})
 
 
 def update_ticker(data: dict):

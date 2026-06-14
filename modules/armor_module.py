@@ -51,6 +51,8 @@ NAME_ALIASES = {
     "left shoulder": ["left_shoulder"],
     "right shoulder": ["right_shoulder"],
     "arms": ["left_arm", "right_arm"],
+    "hands": ["left_arm", "right_arm", "left_biceps", "right_biceps",
+              "left_triceps", "right_triceps", "left_forearm", "right_forearm"],
     "left arm": ["left_arm"],
     "right arm": ["right_arm"],
     "biceps": ["left_biceps", "right_biceps"],

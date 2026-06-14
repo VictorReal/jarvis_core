@@ -318,16 +318,20 @@
   .center-grid:has(.comm-section.collapsed) .center-col2 { display: grid; }
   .center-grid:has(.comm-section.collapsed) .center-col1 .center-slot { display: block; }
 
-  /* КОЛОНКА 1: comm(1) + 2 + 6, одна під одною */
+  /* КОЛОНКА 1: comm(1) + 2 + 6, одна під одною.
+     ВСІ фіксовані: ком-лог і камера тримають розмір незалежно від вмісту;
+     slot-2 забирає решту (порожнє місце при короткому ком-лозі).
+     Підкрути числа 240px / 280px під себе. */
   .center-grid:has(.comm-section.collapsed) .center-col1 {
     display: grid;
-    grid-template-rows: auto 1fr 1fr;   /* comm за вмістом, 2 і 6 ділять решту */
+    grid-template-rows: 240px 1fr 230px;   /* ком-лог(фікс) / slot-2(порожнеча) / камера(фікс) */
     gap: 14px;
     min-height: 0;
   }
   .center-grid:has(.comm-section.collapsed) .center-col1 .comm-section {
-    flex: none;
     min-height: 0;
+    height: 100%;          /* займає рівно свій рядок grid (240px), не за вмістом */
+    overflow: hidden;      /* коротке повідомлення → порожнеча, не розтягує */
   }
 
   /* КОЛОНКА 2: одна повна висота (зони 5,7,8 прибрано) */
@@ -1681,4 +1685,128 @@ box-shadow: 0 0 10px var(--hud-glow);
   0%   { text-shadow: 0 0 20px var(--hud-accent), 0 0 40px var(--hud-glow); }
   25%  { text-shadow: 0 0 40px var(--hud-accent), 0 0 90px var(--hud-accent), 0 0 130px var(--hud-glow); }
   100% { text-shadow: 0 0 20px var(--hud-accent), 0 0 40px var(--hud-glow); }
+}
+/* ── Камера (зона 6, нижня в колонці 1) ──────────────────────────────── */
+/* Блок камери заповнює слот, розмір слота фіксує grid (1fr) — не розпирає. */
+.cam-widget {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.cam-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  flex: none;
+}
+.cam-title {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--hud-accent);
+  opacity: 0.85;
+}
+.cam-fs-btn {
+  background: transparent;
+  border: 1px solid var(--hud-accent-dim);
+  color: var(--hud-accent);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.cam-fs-btn:hover { background: var(--hud-accent-dim); color: #001a2e; }
+.cam-holder {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.cam-stream {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  border-radius: 3px;
+}
+
+/* Фулскрін: камера займає всю середню секцію.
+   Працює лише в компактному режимі (slot-6 видно тільки тоді) —
+   гард у JS не дасть увімкнути у повному режимі, де чат перекриває зони.
+   ВАЖЛИВО: #center-slot-6 лежить ВСЕРЕДИНІ .center-col1, тому col1 НЕ ховаємо —
+   ховаємо лише другу колонку, comm-section і slot-2, а slot-6 розтягуємо. */
+.center-grid.cam-fullscreen {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  grid-template-rows: 1fr !important;
+}
+.center-grid.cam-fullscreen .center-col2 { display: none !important; }
+.center-grid.cam-fullscreen .center-col1 {
+  display: grid !important;
+  grid-template-rows: 1fr !important;   /* лише slot-6 на всю висоту */
+  grid-template-columns: 1fr !important;
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  min-height: 0;
+}
+.center-grid.cam-fullscreen .center-col1 .comm-section,
+.center-grid.cam-fullscreen .center-col1 .slot-2 { display: none !important; }
+.center-grid.cam-fullscreen #center-slot-6 {
+  display: block !important;
+  min-height: 0;
+  height: 100%;
+}
+.center-grid.cam-fullscreen #cam-widget {
+  border: 1px solid var(--hud-accent-dim);
+  border-radius: 4px;
+  height: 100%;
+}
+/* ── Wake scene: спалах + хвиля підсвітки панелей + імпульс тікерів ──── */
+/* JS (playWakeScene) додає ці класи; раніше для них не було стилів. */
+
+/* Спалах усього екрана */
+.wake-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%,
+              var(--hud-accent) 0%, transparent 70%);
+  opacity: 0;
+  animation: wake-flash-anim 0.7s ease-out;
+}
+@keyframes wake-flash-anim {
+  0%   { opacity: 0; }
+  20%  { opacity: 0.45; }
+  100% { opacity: 0; }
+}
+
+/* Хвиля підсвітки по панелях (JS викликає по черзі зі зсувом) */
+.panel.wake-lit,
+.muscle-map-widget.wake-lit,
+.armor-widget.wake-lit {
+  animation: wake-lit-anim 0.9s ease-out;
+}
+@keyframes wake-lit-anim {
+  0%   { box-shadow: inset 0 0 0 transparent, 0 0 0 transparent; }
+  35%  { box-shadow: inset 0 0 30px var(--hud-glow),
+                     0 0 25px var(--hud-accent);
+         border-color: var(--hud-accent); }
+  100% { box-shadow: inset 0 0 0 transparent, 0 0 0 transparent; }
+}
+
+/* Імпульс рядків тікера */
+.wake-pulse {
+  animation: wake-pulse-anim 1.2s ease-out;
+}
+@keyframes wake-pulse-anim {
+  0%   { filter: brightness(1); }
+  30%  { filter: brightness(2.2) drop-shadow(0 0 8px var(--hud-accent)); }
+  100% { filter: brightness(1); }
 }

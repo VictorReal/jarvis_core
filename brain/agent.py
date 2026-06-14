@@ -101,12 +101,37 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
 
     @tool
     def set_volume(volume: int) -> str:
-        """Set the Spotify volume. Use when user wants it louder, quieter, or specifies a percentage (0-100)."""
+        """Set Spotify volume to an EXACT percentage 0-100. Use ONLY when user gives a number
+        (e.g. 'set volume to 50'). For 'louder'/'quieter'/'turn it down' use volume_up/volume_down."""
         volume = max(0, min(100, volume))
         success = music_module.set_volume(volume)
         if success:
             print(f"[SPOTIFY] Гучність встановлена на {volume}%")
             return f"Volume set to {volume} percent, Sir."
+        return "Sir, I couldn't adjust the volume. Perhaps there's no active device?"
+
+    @tool
+    def volume_up() -> str:
+        """Increase volume by a step. Use when user says louder, turn it up, higher, more volume."""
+        cur = music_module._current_volume()
+        if cur is None:
+            cur = 50
+        new = max(0, min(100, cur + 15))
+        if music_module.set_volume(new):
+            print(f"[SPOTIFY] Гучність +: {new}%")
+            return f"Volume up to {new} percent, Sir."
+        return "Sir, I couldn't adjust the volume. Perhaps there's no active device?"
+
+    @tool
+    def volume_down() -> str:
+        """Decrease volume by a step. Use when user says quieter, turn it down, lower, less volume, bring it down."""
+        cur = music_module._current_volume()
+        if cur is None:
+            cur = 50
+        new = max(0, min(100, cur - 15))
+        if music_module.set_volume(new):
+            print(f"[SPOTIFY] Гучність -: {new}%")
+            return f"Volume down to {new} percent, Sir."
         return "Sir, I couldn't adjust the volume. Perhaps there's no active device?"
 
     @tool
@@ -477,11 +502,11 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
     # ------------------------------------------------------------------ #
 
     @tool
-    def check_email(max_results: int = 5) -> str:
+    def check_email() -> str:
         """Check unread emails. Use when user asks about emails, inbox, new messages, or any mail."""
         try:
             from modules.gmail_module import GmailModule
-            return GmailModule().get_unread_summary(max_results)
+            return GmailModule().get_unread_summary(5)
         except Exception as e:
             return f"Sir, email system is unavailable: {e}"
 
@@ -508,12 +533,11 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
     # ------------------------------------------------------------------ #
 
     @tool
-    def check_calendar(hours: int = 24) -> str:
-        """Check upcoming calendar events. Use when user asks about schedule, plans, meetings, or what's next.
-        hours: how many hours ahead to look (default 24)."""
+    def check_calendar() -> str:
+        """Check upcoming calendar events. Use when user asks about schedule, plans, meetings, or what's next."""
         try:
             from modules.calendar_module import CalendarModule
-            return CalendarModule().get_upcoming_summary(hours)
+            return CalendarModule().get_upcoming_summary(24)
         except Exception as e:
             return f"Sir, calendar system is unavailable: {e}"
 
@@ -884,7 +908,7 @@ def create_tools(music_module, nav_module, sensors_module, llm, reminder_module=
         return get_rag().reindex()
 
     return [
-        play_music, set_volume, stop_music,
+        play_music, set_volume, volume_up, volume_down, stop_music,
         fetch_location, fetch_weather, get_route, find_nearby,
         system_status, diagnose_self, open_armor, close_armor,
         open_app, search_web, take_screenshot, lock_screen,
@@ -1047,16 +1071,22 @@ class JarvisAgent:
     def _trim_sentences(text: str, max_sentences: int = 3) -> str:
         """Обрізає відповідь до max_sentences речень (для голосу — коротко).
         Гарантія проти 'трактатів', навіть якщо модель проігнорувала ліміт токенів.
-        Не чіпає коротке; зберігає кінцеву пунктуацію."""
+        Не чіпає коротке; зберігає кінцеву пунктуацію.
+        ВАЖЛИВО: крапка в числах (0.4 km, версія 2.0) та в нумерації списку
+        ('1. ', '2. ') НЕ рахується за кінець речення — інакше відповіді з
+        координатами/цінами/списками (find_nearby, check_email) ріжуться."""
         if not text:
             return text
+        # Маскуємо "несправжні" крапки тимчасовим маркером \x00:
+        masked = re.sub(r'(?<=\d)\.(?=\d)', '\x00', text)        # десяткові: 0.4
+        masked = re.sub(r'(?<=\b\d)\.(?=\s)', '\x00', masked)    # нумерація: "1. "
         # розбиваємо по . ! ? (враховуючи лапки/дужки після знаку)
-        parts = re.findall(r'[^.!?]*[.!?]+["\')\]]?\s*', text)
+        parts = re.findall(r'[^.!?]*[.!?]+["\')\]]?\s*', masked)
         if not parts:
-            return text.strip()
+            return text.replace('\x00', '.').strip()
         if len(parts) <= max_sentences:
             return text.strip()
-        return "".join(parts[:max_sentences]).strip()
+        return "".join(parts[:max_sentences]).replace('\x00', '.').strip()
 
     def _route_complexity(self, user_input: str) -> str:
         """Інвертований роутер. Повертає 'tools' | 'small' | 'big'.
@@ -1084,6 +1114,30 @@ class JarvisAgent:
         #    ніж відправити запит-на-дію в балачку й отримати галюцинацію.
         return "tools"
 
+    def _maybe_doctor(self, user_input: str):
+        """Детермінований роутер самодіагностики (Doctor JARVIS).
+        Повертає рядок-відповідь, якщо це запит діагностики, інакше None.
+        Обходить ненадійний tool-selection моделі (галюцинувала 'no bugs detected'
+        без реального виклику diagnose_self)."""
+        text = user_input.lower().strip()
+
+        DIAG_HINTS = (
+            "diagnose", "diagnostic", "test for bugs", "check for bugs",
+            "what broke", "what went wrong", "what's broken", "whats broken",
+            "any errors", "any bugs", "self-test", "self test", "self-diagnostic",
+            "doctor jarvis", "run diagnostics",
+            "продіагностуй", "діагностику", "діагностика", "що зламалось",
+            "що зламалося", "що поламалось", "чому не працює", "перевір помилки",
+            "перевір на баги", "тест на баги", "доктор джарвіс",
+        )
+        if any(h in text for h in DIAG_HINTS):
+            try:
+                return str(self.tools_map["diagnose_self"].invoke({"reason": ""}))
+            except Exception as e:
+                print(f"[DOCTOR] інтерсептор error: {e}")
+                return None
+        return None
+
     def _maybe_armor(self, user_input: str):
         """Детермінований роутер команд трекера збірки броні.
         Повертає рядок-відповідь, якщо це про armor build, інакше None.
@@ -1109,12 +1163,17 @@ class JarvisAgent:
 
         # --- встановлення статусу деталі ---
         # тригер: команда має згадувати armor/броню/сут-білд
-        if not any(t in text for t in ("armor", "броня", "броні", "suit", "костюм", "mark suit")):
+        # тригер: команда має згадувати armor/броню/сут-білд/iron man
+        ARMOR_TRIGGERS = ("armor", "броня", "броню", "броні", "suit", "костюм",
+                          "mark suit", "iron man", "ironman", "залізна людина",
+                          "залізної людини")
+        if not any(t in text for t in ARMOR_TRIGGERS):
             return None
 
         # визначаємо статус
         status = None
-        if any(w in text for w in ("done", "ready", "finished", "complete", "готов", "надрукован", "надрукував")):
+        if any(w in text for w in ("done", "ready", "finished", "complete", "printed",
+                                     "готов", "надрукован", "надрукував")):
             status = "done"
         elif any(w in text for w in ("printing", "in progress", "друку", "печат")):
             status = "printing"
@@ -1129,12 +1188,14 @@ class JarvisAgent:
         cleaned = text
         JUNK = (
             "armor build", "mark suit", "armor", "suit", "костюм", "броня", "броню", "броні", "mark",
-            "done", "ready", "finished", "complete", "готово", "готова", "готовий",
+            "done", "ready", "finished", "complete", "printed", "print", "готово", "готова", "готовий",
             "надрукований", "надрукована", "надрукував", "printing", "in progress",
             "друкується", "друкую", "печатається", "not printed", "not_printed",
             "todo", "pending", "reset", "not done", "не надруковано", "не готово", "скинь",
             "set", "mark", "as", "the", "to", "is", "now", "встанови", "постав", "признач",
             "in", "of", "my", "please", "for", "on", "a", "an", "будь", "ласка",
+            "log", "iron man's", "iron man", "ironman", "iron", "man's", "man",
+            "залізної людини", "залізна людина", "i", "all", "and", "та", "і",
         )
         for j in sorted(JUNK, key=len, reverse=True):
             cleaned = _re.sub(r"(?<!\w)" + _re.escape(j) + r"(?!\w)", " ", cleaned)
@@ -1144,14 +1205,33 @@ class JarvisAgent:
             return ("Armor noted, Sir, but which part? "
                     "Tell me e.g. 'armor chest done'.")
 
-        # перевіряємо, чи це реальна деталь
-        ids = get_armor().resolve_parts(cleaned)
-        if not ids:
-            return None  # не впізнали деталь → не наша команда
+        # Розбиваємо на окремі деталі (фраза може містити кілька: "chest, hands").
+        # Резолвимо кожен токен, збираємо унікальні id.
+        armor = get_armor()
+        tokens = [t.strip() for t in _re.split(r"[,;]|\band\b|\bта\b|\bі\b", cleaned) if t.strip()]
+        if not tokens:
+            tokens = [cleaned]
+
+        matched_names = []
+        all_ids = []
+        for tok in tokens:
+            tids = armor.resolve_parts(tok)
+            if tids:
+                matched_names.append(tok)
+                for i in tids:
+                    if i not in all_ids:
+                        all_ids.append(i)
+
+        if not all_ids:
+            return None  # жодної деталі не впізнали → не наша команда
 
         try:
-            return str(self.tools_map["armor_build_status"].invoke(
-                {"part": cleaned, "status": status}))
+            for pid in all_ids:
+                armor.set_status(pid, status)
+            nice = status.replace("_", " ")
+            parts_str = ", ".join(matched_names)
+            return (f"Logged, Sir. Armor {parts_str} set to {nice}. "
+                    f"({len(all_ids)} part(s))")
         except Exception as e:
             print(f"[ARMOR] status error: {e}")
             return None
@@ -1279,6 +1359,13 @@ class JarvisAgent:
         # llama-4-scout часто ігнорує log_workout і галюцинує "залоговано" текстом.
         # Тому workout-команди ловимо тут напряму й кличемо тул без участі моделі.
         # Те саме для armor build (галюцинувала 'done' без виклику тула).
+        dx = self._maybe_doctor(user_input)
+        if dx is not None:
+            self.chat_history.append(HumanMessage(content=user_input))
+            self.chat_history.append(AIMessage(content=dx))
+            save_history(self.chat_history)
+            return dx
+
         ar = self._maybe_armor(user_input)
         if ar is not None:
             self.chat_history.append(HumanMessage(content=user_input))
@@ -1359,6 +1446,20 @@ class JarvisAgent:
                         tool_id = tool_call["id"]
                         print(f"[AGENT] Викликає: {tool_name}({tool_args})")
 
+                        # Захист: моделі Groq часто шлють числа рядком ("5" замість 5).
+                        # Конвертуємо рядкові числа, щоб тул не падав на валідації типів.
+                        if isinstance(tool_args, dict):
+                            coerced = {}
+                            for k, v in tool_args.items():
+                                if isinstance(v, str):
+                                    sv = v.strip()
+                                    if re.fullmatch(r"-?\d+", sv):
+                                        v = int(sv)
+                                    elif re.fullmatch(r"-?\d*\.\d+", sv):
+                                        v = float(sv)
+                                coerced[k] = v
+                            tool_args = coerced
+
                         if tool_name in self.tools_map:
                             tool_result = self.tools_map[tool_name].invoke(tool_args)
                         else:
@@ -1400,11 +1501,25 @@ class JarvisAgent:
                 else:
                     answer = response.content.strip()
 
-                import re
                 # Фікс llama-4-scout: інколи модель ПИШЕ виклик тула текстом
                 # (напр. search_my_history(query="...")) замість справжнього tool_call.
                 # Ловимо такий рядок, реально викликаємо тул і переспитуємо модель.
                 m = re.fullmatch(r'\s*(?:f\.)?(\w+)\((.*)\)\s*', answer, re.DOTALL)
+                # Другий формат: 'tool_name called with part="chest", status="done"...'
+                # (llama іноді описує виклик словами замість дужок). Беремо лише
+                # якщо рядок ПОЧИНАЄТЬСЯ з реальної назви тула.
+                if not m:
+                    m2 = re.match(r'\s*(?:f\.)?(\w+)\s+called with\s+(.*)', answer,
+                                  re.DOTALL | re.IGNORECASE)
+                    if m2 and m2.group(1) in self.tools_map:
+                        # обрізаємо хвіст після першого речення з аргументами
+                        args_part = m2.group(2).split(".")[0]
+                        m = re.match(r'()(.*)', m2.group(1) + "(" + args_part + ")")
+                        # підміняємо групи вручну через простий обʼєкт
+                        class _M:
+                            def __init__(s, name, args): s._n, s._a = name, args
+                            def group(s, i): return s._n if i == 1 else s._a
+                        m = _M(m2.group(1), args_part)
                 if m and m.group(1) in self.tools_map:
                     fake_name = m.group(1)
                     raw_args = m.group(2).strip()

@@ -324,6 +324,42 @@ socket.on('stop_youtube', function () {
   ytPause();
 });
 
+// Чи YouTube ЗАРАЗ грає (видимий плеєр + стан PLAYING)
+function _ytIsPlaying() {
+  try {
+    if (!_ytPlayer || !_ytPlayer.getPlayerState) return false;
+    var mini = document.getElementById('yt-mini');
+    if (!mini || mini.style.display === 'none') return false;
+    return _ytPlayer.getPlayerState() === YT.PlayerState.PLAYING;
+  } catch (e) { return false; }
+}
+
+// Чи плеєр YouTube активний (видимий), незалежно play/pause
+function _ytActive() {
+  var mini = document.getElementById('yt-mini');
+  return !!(_ytPlayer && mini && mini.style.display !== 'none');
+}
+
+// Жест медіа з gesture_controller. Якщо активний YouTube — керуємо ним,
+// інакше — музикою (Spotify) через music_action.
+socket.on('gesture_media', function (data) {
+  var action = (data && data.action) || '';
+  if (_ytActive()) {
+    // керуємо YouTube
+    if (action === 'toggle') {
+      try {
+        var st = _ytPlayer.getPlayerState();
+        if (st === YT.PlayerState.PLAYING) { _ytPlayer.pauseVideo(); }
+        else { _ytPlayer.playVideo(); }
+      } catch (e) {}
+    }
+    // next/prev для YouTube поки не діють (один ролик) — ігноруємо тихо
+    return;
+  }
+  // YouTube не активний → музика
+  try { socket.emit('music_action', { action: action, value: null }); } catch (e) {}
+});
+
 // результати пошуку (з HUD-поля або від голосового тула)
 socket.on('youtube_results', function (data) { ytRenderResults(data); });
 
@@ -360,6 +396,16 @@ function playWakeScene() {
     logo.classList.add('wake-logo');
     setTimeout(function () { logo.classList.remove('wake-logo'); }, 1500);
   }
+
+  // Підсвітка muscle map + armor build (видимі в компактному режимі ком-логу)
+  ['muscle-map-widget', 'armor-widget'].forEach(function (id, i) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    setTimeout(function () {
+      el.classList.add('wake-lit');
+      setTimeout(function () { el.classList.remove('wake-lit'); }, 1100);
+    }, 300 + i * 220);
+  });
 }
 socket.on('wake_scene', function () { playWakeScene(); });
 
@@ -1713,3 +1759,81 @@ document.addEventListener('keydown', function(e) {
 document.getElementById('corr-modal').addEventListener('click', function(e) {
   if (e.target.id === 'corr-modal') closeCorrModal();
 });
+
+// ── Камера у HUD (зона 6) ──────────────────────────────────────────────
+// Кадр тягнемо як <img>, перезавантажуючи src по таймеру (~10 fps).
+// Простіше й стабільніше за MJPEG для нашого випадку.
+let _camTimer = null;
+
+function _camVisible() {
+  // вкладка прихована (інше вікно/мінімізовано) → стрім не потрібен
+  if (document.hidden) return false;
+  const img = document.getElementById('cam-stream');
+  if (!img) return false;
+  // віджет реально видимий на екрані
+  const box = img.getBoundingClientRect();
+  if (box.width === 0 || box.height === 0) return false;
+  return true;
+}
+
+function _camStart() {
+  const img = document.getElementById('cam-stream');
+  if (!img) return;
+  if (_camTimer) return;
+  _camTimer = setInterval(() => {
+    // тягнемо кадр ЛИШЕ коли вкладка активна і камеру видно (економія CPU)
+    if (!_camVisible()) return;
+    img.src = '/camera/frame?t=' + Date.now();
+  }, 100);
+}
+
+// Коли вкладку згортають/повертають — браузер сам призупинить таймер,
+// але явна перевірка _camVisible() гарантує, що прихований стрім не вантажить.
+document.addEventListener('visibilitychange', function () {
+  // при поверненні у вкладку стрім відновиться сам на наступному тіку
+});
+
+// Фулскрін камери: тогл класу на .center-grid.
+// ГАРД: працює лише коли ком-лог компактний (collapsed) — інакше
+// у повному режимі чат перекриває зони і камеру не видно.
+function toggleCameraFullscreen() {
+  const grid = document.querySelector('.center-grid');
+  const comm = document.getElementById('comm-section');
+  if (!grid || !comm) return;
+
+  const isCompact = comm.classList.contains('collapsed');
+  const isFs = grid.classList.contains('cam-fullscreen');
+
+  if (!isFs) {
+    // Вмикаємо фулскрін лише в компактному режимі
+    if (!isCompact) {
+      // Підказка: спершу згорни ком-лог
+      grid.classList.remove('cam-fullscreen');
+      return;
+    }
+    grid.classList.add('cam-fullscreen');
+  } else {
+    grid.classList.remove('cam-fullscreen');
+  }
+}
+
+// Якщо ком-лог розгортають назад — автоматично гасимо фулскрін камери,
+// щоб не лишити «завислий» стан.
+(function _wireCommToCamera() {
+  const comm = document.getElementById('comm-section');
+  if (!comm) return;
+  const obs = new MutationObserver(() => {
+    if (!comm.classList.contains('collapsed')) {
+      const grid = document.querySelector('.center-grid');
+      if (grid) grid.classList.remove('cam-fullscreen');
+    }
+  });
+  obs.observe(comm, { attributes: true, attributeFilter: ['class'] });
+})();
+
+// Старт стріму камери після завантаження сторінки
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _camStart);
+} else {
+  _camStart();
+}

@@ -26,9 +26,26 @@ WORKOUTS_FILE = Path("data/workouts.json")
 FRONT_GROUPS = ["chest", "abs", "obliques", "shoulders", "biceps", "forearms",
                 "quads", "calves_front"]
 # ззаду
-BACK_GROUPS = ["traps", "lats", "lower_back", "rear_delts", "triceps",
+BACK_GROUPS = ["traps", "lats", "rhomboids", "lower_back", "rear_delts", "triceps",
                "glutes", "hamstrings", "calves_back"]
 ALL_GROUPS = FRONT_GROUPS + BACK_GROUPS
+
+# Людські назви груп для відповіді (без технічних id з "_").
+# calves_front + calves_back → одне "calves" (front/back — деталь мапи).
+_DISPLAY_NAMES = {
+    "calves_front": "calves", "calves_back": "calves",
+    "lower_back": "lower back", "rear_delts": "rear delts",
+    "rhomboids": "rhomboids",
+}
+
+def _humanize_groups(groups: list) -> str:
+    """id груп → чистий список людських назв, без дублів, зі збереженням порядку."""
+    seen = []
+    for g in groups:
+        name = _DISPLAY_NAMES.get(g, g)
+        if name not in seen:
+            seen.append(name)
+    return ", ".join(seen)
 
 # ── Словник вправ → мʼязові групи ─────────────────────────────────────────
 # Ключі — у нижньому регістрі, і укр і англ варіанти. Значення — групи.
@@ -60,10 +77,10 @@ EXERCISE_MAP = {
     "становая": ["lower_back", "hamstrings", "glutes", "traps", "lats"],
     "деадліфт": ["lower_back", "hamstrings", "glutes", "traps", "lats"],
     "дедліфт": ["lower_back", "hamstrings", "glutes", "traps", "lats"],
-    "row": ["lats", "biceps", "traps", "rear_delts"],
-    "тяга": ["lats", "biceps", "traps", "rear_delts"],
-    "тяга штанги": ["lats", "biceps", "traps", "rear_delts"],
-    "тяга в нахилі": ["lats", "biceps", "traps", "rear_delts"],
+    "row": ["lats", "biceps", "traps", "rear_delts", "rhomboids"],
+    "тяга": ["lats", "biceps", "traps", "rear_delts", "rhomboids"],
+    "тяга штанги": ["lats", "biceps", "traps", "rear_delts", "rhomboids"],
+    "тяга в нахилі": ["lats", "biceps", "traps", "rear_delts", "rhomboids"],
     "lat pulldown": ["lats", "biceps"],
     "тяга верхнього блоку": ["lats", "biceps"],
 
@@ -134,8 +151,11 @@ EXERCISE_MAP = {
 
     # ПРЯМІ НАЗВИ ГРУП (якщо просто кажуть "тренував груди")
     "груди": ["chest"], "chest": ["chest"],
-    "спина": ["lats", "traps", "lower_back", "rear_delts"],
-    "back": ["lats", "traps", "lower_back", "rear_delts"],
+    "спина": ["lats", "traps", "lower_back", "rear_delts", "rhomboids"],
+    "back": ["lats", "traps", "lower_back", "rear_delts", "rhomboids"],
+    "lower back": ["lower_back"], "low back": ["lower_back"],
+    "нижня спина": ["lower_back"], "низ спини": ["lower_back"],
+    "поперек": ["lower_back"], "lower_back": ["lower_back"],
     "плечі": ["shoulders", "rear_delts"], "shoulders": ["shoulders", "rear_delts"],
     "ноги": ["quads", "hamstrings", "glutes", "calves_front", "calves_back"],
     "legs": ["quads", "hamstrings", "glutes", "calves_front", "calves_back"],
@@ -148,6 +168,8 @@ EXERCISE_MAP = {
     "hamstrings": ["hamstrings"], "hamstring": ["hamstrings"],
     "glutes": ["glutes"], "calves": ["calves_front", "calves_back"],
     "lats": ["lats"], "traps": ["traps"], "trapezius": ["traps"],
+    "rhomboids": ["rhomboids"], "rhomboid": ["rhomboids"],
+    "ромбоподібні": ["rhomboids"], "ромби": ["rhomboids"], "ромбовидні": ["rhomboids"],
     "obliques": ["obliques"],
     "hands": ["biceps", "triceps", "forearms"],
     "arms": ["biceps", "triceps", "forearms"],
@@ -174,10 +196,15 @@ class WorkoutModule:
         if t in EXERCISE_MAP:
             return EXERCISE_MAP[t]
         hits = []
-        for key, groups in EXERCISE_MAP.items():
-            # ключ має зустрітись як ціле слово/фраза (по межах слів)
+        matched_keys = []
+        # довші ключі першими — щоб "lower back" зматчився раніше за "back"
+        for key in sorted(EXERCISE_MAP, key=len, reverse=True):
+            # пропускаємо ключ, якщо він підрядок уже зматченого довшого ключа
+            if any(key in mk and key != mk for mk in matched_keys):
+                continue
             if _re.search(r"(?<!\w)" + _re.escape(key) + r"(?!\w)", t):
-                hits.extend(groups)
+                hits.extend(EXERCISE_MAP[key])
+                matched_keys.append(key)
         return list(dict.fromkeys(hits))
 
     def _resolve_groups(self, exercise_text: str) -> list:
@@ -187,11 +214,17 @@ class WorkoutModule:
         # точний збіг
         if t in EXERCISE_MAP:
             return EXERCISE_MAP[t]
-        # частковий збіг (текст містить ключ)
+        # частковий збіг (текст містить ключ).
+        # Довші ключі першими, щоб "lower back" зматчився раніше за "back",
+        # і коротший підрядок уже зматченого ключа не домішувався.
         hits = []
-        for key, groups in EXERCISE_MAP.items():
+        matched_keys = []
+        for key in sorted(EXERCISE_MAP, key=len, reverse=True):
+            if any(key in mk and key != mk for mk in matched_keys):
+                continue
             if key in t:
-                hits.extend(groups)
+                hits.extend(EXERCISE_MAP[key])
+                matched_keys.append(key)
         if hits:
             return list(dict.fromkeys(hits))
 
@@ -291,7 +324,7 @@ class WorkoutModule:
             "groups": all_groups,
         })
         self._save(data)
-        return f"Logged, Sir. Worked: {', '.join(all_groups)}."
+        return f"Logged, Sir. Worked: {_humanize_groups(all_groups)}."
 
     # ------------------------------------------------------------------ #
     #  Дані для мапи: остання активність кожної групи → колір
@@ -342,7 +375,7 @@ class WorkoutModule:
         names = {
             "chest": "Chest", "abs": "Abs", "obliques": "Obliques",
             "shoulders": "Shoulders", "biceps": "Biceps", "forearms": "Forearms",
-            "quads": "Quads", "calves_front": "Calves (front)", "traps": "Traps",
+            "quads": "Quads", "calves_front": "Calves (front)", "traps": "Traps", "rhomboids": "Rhomboids",
             "lats": "Lats", "lower_back": "Lower back", "rear_delts": "Rear delts",
             "triceps": "Triceps", "glutes": "Glutes", "hamstrings": "Hamstrings",
             "calves_back": "Calves (back)",

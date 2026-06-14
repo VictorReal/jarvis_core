@@ -9,7 +9,7 @@ from pyngrok import ngrok
 
 from modules.voice_module import speak, _voice, set_voice_personality
 from modules.speech_module import start_home_conversation, start_ironman_conversation, set_lang_mode, register_tts, mark_tts_done
-from modules.hud_module import run_hud, update_hud, add_message, set_hud_command_callback, set_music_action_callback, set_youtube_search_callback, set_wake_callback
+from modules.hud_module import run_hud, update_hud, add_message, set_hud_command_callback, set_music_action_callback, set_youtube_search_callback, set_wake_callback, gesture_media
 from modules.reminder_module import ReminderModule
 from modules.spotify_poller import SpotifyPoller
 from weather_alert import WeatherAlert
@@ -84,6 +84,7 @@ class Jarvis:
         self.lock = threading.Lock()
         self.is_speaking = threading.Event()
         self._sleep_active = False
+        self._volume_before_sleep = 40
         self.mode = "home"
         print(f"[JARVIS] Режим: {self.mode.upper()}")
 
@@ -139,12 +140,27 @@ class Jarvis:
         self.gesture_controller = None
         try:
             from modules.hud_module import log_activity
-            self.camera_vision = CameraVision(camera_index=0, draw_preview=True)
+            self.camera_vision = CameraVision(camera_index=0, draw_preview=False)
             self.camera_vision.start()
+            from modules.hud_module import set_camera_vision
+            set_camera_vision(self.camera_vision)  # HUD віддає кадри в браузер
+            # курсор-режим (point вмикає, fist вимикає)
+            from modules.mouse_controller import MouseController
+            self.mouse_controller = MouseController(
+                self.camera_vision,
+                hud_callback=log_activity,
+                speak_callback=lambda text: self.safe_speak(text),
+            )
+            self.mouse_controller.start()
             self.gesture_controller = GestureController(
                 self.camera_vision,
                 self.brain.music_module,
                 hud_callback=log_activity,
+                speak_callback=lambda text: self.safe_speak(text),
+                wake_callback=lambda: self.wake_mode(silent=False),
+                sleep_callback=lambda: self.sleep_mode(),
+                mouse_controller=self.mouse_controller,
+                media_callback=lambda action: gesture_media(action),
             )
             self.gesture_controller.start()
             print("[JARVIS] Зір + жести запущено")
@@ -290,11 +306,26 @@ class Jarvis:
                     time.sleep(0.8)
 
     def sleep_mode(self):
-        """Знижує гучність, гасить HUD, ставить нагадування на ранок."""
+        """Глушить звук (стоп музики + гучність 0), гасить HUD, ставить нагадування на ранок.
+        Поточну гучність запам'ятовуємо, щоб відновити при пробудженні."""
         was_active = self._sleep_active
         self._sleep_active = True
+        # синхронізуємо контролер (якщо sleep через текст/голос, не жест)
         try:
-            self.brain.music_module.set_volume(10)
+            if getattr(self, "gesture_controller", None):
+                self.gesture_controller.notify_slept()
+        except Exception:
+            pass
+        try:
+            # запам'ятовуємо гучність, щоб wake повернув саме її
+            cur = self.brain.music_module._current_volume()
+            if cur is not None:
+                self._volume_before_sleep = cur
+        except Exception:
+            pass
+        try:
+            self.brain.music_module.stop()          # пауза відтворення
+            self.brain.music_module.set_volume(0)   # повна тиша
         except Exception:
             pass
         try:
@@ -317,19 +348,33 @@ class Jarvis:
                 pass
 
     def wake_mode(self, silent: bool = False):
-        """Прокидання зі sleep: знімає затемнення, повертає гучність."""
+        """Прокидання зі sleep: знімає затемнення, повертає гучність, яка була."""
         self._sleep_active = False
+        # синхронізуємо режим жестового контролера (якщо sleep був через жест,
+        # а пробудження — текстом/голосом)
+        try:
+            if getattr(self, "gesture_controller", None):
+                self.gesture_controller.notify_woke()
+        except Exception:
+            pass
         try:
             from modules.hud_module import socketio
             socketio.emit('state_update', {'sleep': False})
         except Exception:
             pass
         try:
-            self.brain.music_module.set_volume(40)
+            # відновлюємо гучність, яка була до сну (fallback 40)
+            restore = getattr(self, "_volume_before_sleep", 40) or 40
+            self.brain.music_module.set_volume(restore)
         except Exception:
             pass
         if not silent:
-            self.safe_speak("Good morning, Sir. Systems back online.")
+            from datetime import datetime as _dt
+            h = _dt.now().hour
+            greet = ("Good morning" if 5 <= h < 12 else
+                     "Good afternoon" if 12 <= h < 18 else
+                     "Good evening" if 18 <= h < 23 else "Hello")
+            self.safe_speak(f"{greet}, Sir. Systems back online.")
 
     def _handle_music_action(self, action, value=None):
         """Прямі дії плеєра з HUD (без LLM)."""
@@ -343,7 +388,7 @@ class Jarvis:
                 mm.pause()
             elif action == "next":
                 mm.next_track()
-            elif action == "prev":
+            elif action in ("prev", "previous"):
                 mm.previous_track()
             elif action == "volume" and value is not None:
                 mm.set_volume(int(value))
@@ -413,6 +458,9 @@ class Jarvis:
                 run_wake_scene(self, self.safe_speak)
             except Exception as e:
                 print(f"[WAKE] Помилка сценарію: {e}")
+            # знімаємо sleep-стан (гучність, HUD-затемнення, режим контролера)
+            if self._sleep_active:
+                self.wake_mode(silent=True)
             update_hud("status", "ONLINE")
             return
 
